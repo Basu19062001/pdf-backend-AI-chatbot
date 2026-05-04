@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     VERSION: str = config("VERSION", cast=str, default="0.1.0")
     ENVIRONMENT: str = config("ENVIRONMENT", cast=str, default="development")
     DEBUG: bool = config("DEBUG", cast=bool, default=False)
+    LOG_LEVEL: str = config("LOG_LEVEL", cast=str, default="INFO")
 
     API_V1_STR: str = config("API_V1_STR", cast=str, default="/api/v1")
 

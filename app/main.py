@@ -8,8 +8,12 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from app.backend.api.router import api_router
 from app.core.config import settings
+from app.logger import get_logger, setup_logging
+from app.middleware.request_logging import RequestLoggingMiddleware
 
 security = HTTPBasic()
+setup_logging()
+logger = get_logger(__name__)
 
 
 def verify_docs_access(
@@ -39,6 +43,7 @@ def create_application() -> FastAPI:
         debug=settings.DEBUG,
     )
     app.include_router(api_router, prefix=settings.API_V1_STR)
+    app.add_middleware(RequestLoggingMiddleware)
 
     @app.get("/health", include_in_schema=False)
     def root_healthcheck() -> dict[str, str]:

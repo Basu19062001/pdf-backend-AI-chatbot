@@ -134,3 +134,4 @@ OPENAPI_URL=/openapi.json
 - The current implementation focuses on production-grade structure and separation of concerns.
 - Service implementations for PDF parsing, embeddings, vector storage, and LLM responses are intentionally stubbed and ready to be replaced with real integrations.
 - SQLite is the default local database for quick startup, but the app structure is ready for a stronger production database setup.
+- Logging is centralized in `app/logger.py` and request logging middleware lives in `app/middleware/request_logging.py`.
