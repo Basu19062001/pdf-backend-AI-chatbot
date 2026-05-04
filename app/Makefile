@@ -1,0 +1,4 @@
+.PHONY: %
+
+%:
+	@$(MAKE) -f ../Makefile $@
