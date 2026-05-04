@@ -1,7 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
-
-from app.backend.api.dependencies import get_db
+from fastapi import APIRouter, HTTPException, status
 from app.schemas.chat import (
     ChatMessageCreate,
     ChatSessionCreate,
@@ -14,8 +11,8 @@ router = APIRouter()
 
 
 @router.get("/sessions", response_model=ChatSessionListResponse)
-def list_sessions(db: Session = Depends(get_db)) -> ChatSessionListResponse:
-    service = ChatService(db)
+def list_sessions() -> ChatSessionListResponse:
+    service = ChatService()
     return ChatSessionListResponse(items=service.list_sessions())
 
 
@@ -26,15 +23,14 @@ def list_sessions(db: Session = Depends(get_db)) -> ChatSessionListResponse:
 )
 def create_session(
     payload: ChatSessionCreate,
-    db: Session = Depends(get_db),
 ) -> ChatSessionResponse:
-    service = ChatService(db)
+    service = ChatService()
     return service.create_session(payload)
 
 
 @router.get("/sessions/{session_id}", response_model=ChatSessionResponse)
-def get_session(session_id: str, db: Session = Depends(get_db)) -> ChatSessionResponse:
-    service = ChatService(db)
+def get_session(session_id: str) -> ChatSessionResponse:
+    service = ChatService()
     session = service.get_session(session_id)
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
@@ -49,9 +45,8 @@ def get_session(session_id: str, db: Session = Depends(get_db)) -> ChatSessionRe
 def add_message(
     session_id: str,
     payload: ChatMessageCreate,
-    db: Session = Depends(get_db),
 ) -> ChatSessionResponse:
-    service = ChatService(db)
+    service = ChatService()
     session = service.add_message(session_id=session_id, payload=payload)
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
