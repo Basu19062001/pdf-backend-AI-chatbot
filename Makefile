@@ -7,9 +7,9 @@ UVICORN := $(BIN)/uvicorn
 APP_MODULE ?= app.main:app
 HOST ?= 0.0.0.0
 PORT ?= 8000
-ENV_FILE ?= .env
+ENV_FILE ?= app/.env
 REQUIREMENTS_FILE ?= app/backend/requirements.txt
-ENV_EXAMPLE := $(firstword $(wildcard .env.example app/env/.env.example))
+ENV_EXAMPLE := $(firstword $(wildcard app/env/.env.example .env.example))
 
 .PHONY: help venv install setup env run dev compile ci clean reset-db docker-build docker-up docker-down docker-logs
 

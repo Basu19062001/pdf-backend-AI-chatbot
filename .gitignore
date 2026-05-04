@@ -12,6 +12,7 @@ ENV/
 # Environment files
 .env
 .env.*
+app/.env
 !.env.example
 !app/env/.env.example
 
