@@ -37,6 +37,13 @@ cp .env.example .env
 uvicorn app.main:app --reload
 ```
 
+Or use `make`:
+
+```bash
+make setup
+make dev
+```
+
 ## Available Endpoints
 
 - `GET /api/v1/health`
