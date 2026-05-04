@@ -8,19 +8,21 @@ APP_MODULE ?= app.main:app
 HOST ?= 0.0.0.0
 PORT ?= 8000
 ENV_FILE ?= .env
+REQUIREMENTS_FILE ?= app/backend/requirements.txt
 ENV_EXAMPLE := $(firstword $(wildcard .env.example app/env/.env.example))
 
-.PHONY: help venv install setup env run dev compile clean reset-db docker-build docker-up docker-down docker-logs
+.PHONY: help venv install setup env run dev compile ci clean reset-db docker-build docker-up docker-down docker-logs
 
 help:
 	@echo "Available targets:"
 	@echo "  make venv       Create the virtual environment"
-	@echo "  make install    Install dependencies into the virtual environment"
+	@echo "  make install    Install dependencies from $(REQUIREMENTS_FILE)"
 	@echo "  make env        Create $(ENV_FILE) from the example file if missing"
 	@echo "  make setup      Prepare venv, dependencies, and env file"
 	@echo "  make run        Run the FastAPI app"
 	@echo "  make dev        Run the FastAPI app with reload"
 	@echo "  make compile    Compile-check the app package"
+	@echo "  make ci         Run the local CI checks"
 	@echo "  make clean      Remove Python cache files"
 	@echo "  make reset-db   Remove the local SQLite database"
 	@echo "  make docker-build  Build the Docker image"
@@ -33,7 +35,7 @@ venv:
 
 install: venv
 	$(PIP) install --upgrade pip
-	$(PIP) install -r requirements.txt
+	$(PIP) install -r $(REQUIREMENTS_FILE)
 
 env:
 	@if [ -f "$(ENV_FILE)" ]; then \
@@ -67,6 +69,17 @@ compile:
 		"$(PYTHON_BIN)" -m compileall app; \
 	else \
 		$(PYTHON) -m compileall app; \
+	fi
+
+ci: install
+	@if [ -x "$(PYTHON_BIN)" ]; then \
+		"$(PYTHON_BIN)" -m pip check; \
+		"$(PYTHON_BIN)" -m compileall app; \
+		"$(PYTHON_BIN)" -c "from app.main import app; print(app.title)"; \
+	else \
+		$(PYTHON) -m pip check; \
+		$(PYTHON) -m compileall app; \
+		$(PYTHON) -c "from app.main import app; print(app.title)"; \
 	fi
 
 clean:

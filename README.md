@@ -22,8 +22,9 @@ pdf-chatbot-backend/
 │   ├── utils/
 │   └── main.py
 ├── uploads/
-├── .env.example
-├── requirements.txt
+├── .github/
+├── Makefile
+├── docker-compose.yml
 └── README.md
 ```
 
@@ -32,7 +33,7 @@ pdf-chatbot-backend/
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r app/backend/requirements.txt
 cp .env.example .env
 uvicorn app.main:app --reload
 ```
@@ -59,6 +60,43 @@ Or with `make`:
 make docker-build
 make docker-up
 ```
+
+## CI and Branch Protection
+
+GitHub Actions is the right choice here. The workflow is defined in `.github/workflows/backend-ci.yml` and runs on both:
+
+- pushes to `main` and `development`
+- pull requests targeting `main` and `development`
+
+Current CI checks:
+
+- install Python dependencies from `app/backend/requirements.txt`
+- validate dependencies with `pip check`
+- compile the `app` package
+- smoke-test the FastAPI app import
+
+Run the same checks locally with:
+
+```bash
+make ci
+```
+
+Important: a workflow alone cannot stop an already completed direct push. To make CI truly block bad code from landing in `main` or `development`, configure GitHub branch protection:
+
+1. Go to `GitHub -> Settings -> Branches`.
+2. Add a branch protection rule for `main`.
+3. Add another rule for `development`.
+4. Enable `Require a pull request before merging`.
+5. Enable `Require status checks to pass before merging`.
+6. Select the status check named `backend-ci`.
+7. Optionally enable `Require approvals` and `Restrict who can push to matching branches`.
+
+Recommended workflow:
+
+- create feature branches from `development`
+- open a pull request into `development`
+- let CI pass before merge
+- promote tested changes from `development` into `main` through another pull request
 
 ## Available Endpoints
 
