@@ -44,6 +44,22 @@ make setup
 make dev
 ```
 
+## Docker
+
+```bash
+cp app/env/.env.example .env
+docker compose up --build
+```
+
+The Dockerfile lives at `app/Dockerfile`, while `docker-compose.yml` stays at the project root so it can use the whole repository as build context.
+
+Or with `make`:
+
+```bash
+make docker-build
+make docker-up
+```
+
 ## Available Endpoints
 
 - `GET /api/v1/health`

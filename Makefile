@@ -10,7 +10,7 @@ PORT ?= 8000
 ENV_FILE ?= .env
 ENV_EXAMPLE := $(firstword $(wildcard .env.example app/env/.env.example))
 
-.PHONY: help venv install setup env run dev compile clean reset-db
+.PHONY: help venv install setup env run dev compile clean reset-db docker-build docker-up docker-down docker-logs
 
 help:
 	@echo "Available targets:"
@@ -23,6 +23,10 @@ help:
 	@echo "  make compile    Compile-check the app package"
 	@echo "  make clean      Remove Python cache files"
 	@echo "  make reset-db   Remove the local SQLite database"
+	@echo "  make docker-build  Build the Docker image"
+	@echo "  make docker-up     Start the app with docker compose"
+	@echo "  make docker-down   Stop docker compose services"
+	@echo "  make docker-logs   Tail docker compose logs"
 
 venv:
 	$(PYTHON) -m venv $(VENV)
@@ -71,3 +75,15 @@ clean:
 
 reset-db:
 	rm -f pdf_chatbot.db
+
+docker-build:
+	docker compose build
+
+docker-up:
+	docker compose up -d
+
+docker-down:
+	docker compose down
+
+docker-logs:
+	docker compose logs -f backend
