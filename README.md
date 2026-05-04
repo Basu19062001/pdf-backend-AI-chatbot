@@ -75,6 +75,12 @@ Current CI checks:
 - compile the `app` package
 - smoke-test the FastAPI app import
 
+Dependency caching:
+
+- GitHub Actions caches `pip` downloads using `app/backend/requirements.txt` as the cache key source
+- Docker now reuses a persistent pip cache during image builds
+- local `pip install` also reuses the normal pip cache unless you clear it manually
+
 Run the same checks locally with:
 
 ```bash
