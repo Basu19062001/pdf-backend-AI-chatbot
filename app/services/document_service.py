@@ -1,24 +1,26 @@
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from datetime import datetime, timezone
 
-from app.models.document import Document
-from app.schemas.document import DocumentCreate
+from app.schemas.document import DocumentCreate, DocumentResponse
+from app.utils.id_generator import generate_entity_id
+
+_DOCUMENT_STORE: dict[str, DocumentResponse] = {}
 
 
 class DocumentService:
-    def __init__(self, db: Session) -> None:
-        self.db = db
+    def list_documents(self) -> list[DocumentResponse]:
+        return sorted(_DOCUMENT_STORE.values(), key=lambda item: item.created_at, reverse=True)
 
-    def list_documents(self) -> list[Document]:
-        stmt = select(Document).order_by(Document.created_at.desc())
-        return list(self.db.scalars(stmt).all())
-
-    def create_document(self, payload: DocumentCreate) -> Document:
-        document = Document(**payload.model_dump())
-        self.db.add(document)
-        self.db.commit()
-        self.db.refresh(document)
+    def create_document(self, payload: DocumentCreate) -> DocumentResponse:
+        now = datetime.now(timezone.utc)
+        document = DocumentResponse(
+            id=generate_entity_id("doc"),
+            status="uploaded",
+            created_at=now,
+            updated_at=now,
+            **payload.model_dump(),
+        )
+        _DOCUMENT_STORE[document.id] = document
         return document
 
-    def get_document(self, document_id: str) -> Document | None:
-        return self.db.get(Document, document_id)
+    def get_document(self, document_id: str) -> DocumentResponse | None:
+        return _DOCUMENT_STORE.get(document_id)
