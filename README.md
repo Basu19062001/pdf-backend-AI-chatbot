@@ -7,16 +7,12 @@ Production-style modular monolith backend scaffold for a PDF chatbot system.
 ```text
 pdf-chatbot-backend/
 ├── app/
-│   ├── api/
-│   │   ├── dependencies.py
-│   │   ├── router.py
-│   │   └── routes/
+│   ├── .env
+│   ├── backend/
+│   │   ├── api/
+│   │   └── requirements.txt
 │   ├── core/
 │   │   └── config.py
-│   ├── db/
-│   │   ├── base.py
-│   │   └── session.py
-│   ├── models/
 │   ├── schemas/
 │   ├── services/
 │   ├── utils/
@@ -34,7 +30,7 @@ pdf-chatbot-backend/
 python -m venv .venv
 source .venv/bin/activate
 pip install -r app/backend/requirements.txt
-cp .env.example .env
+cp app/env/.env.example app/.env
 uvicorn app.main:app --reload
 ```
 
@@ -48,7 +44,7 @@ make dev
 ## Docker
 
 ```bash
-cp app/env/.env.example .env
+cp app/env/.env.example app/.env
 docker compose up --build
 ```
 
@@ -114,9 +110,28 @@ Recommended workflow:
 - `POST /api/v1/chats/sessions`
 - `GET /api/v1/chats/sessions/{session_id}`
 - `POST /api/v1/chats/sessions/{session_id}/messages`
+- `GET /docs` protected with HTTP Basic auth
+- `GET /redoc` protected with HTTP Basic auth
+- `GET /openapi.json` protected with HTTP Basic auth
+
+## Docs Security
+
+FastAPI's default public docs are disabled. Documentation endpoints are recreated with HTTP Basic authentication and configured from `app/.env`.
+
+Example variables:
+
+```env
+DOCS_ENABLED=true
+DOCS_USERNAME=admin
+DOCS_PASSWORD=change-this-password
+DOCS_URL=/docs
+REDOC_URL=/redoc
+OPENAPI_URL=/openapi.json
+```
 
 ## Notes
 
 - The current implementation focuses on production-grade structure and separation of concerns.
 - Service implementations for PDF parsing, embeddings, vector storage, and LLM responses are intentionally stubbed and ready to be replaced with real integrations.
 - SQLite is the default local database for quick startup, but the app structure is ready for a stronger production database setup.
+- Logging is centralized in `app/logger.py` and request logging middleware lives in `app/middleware/request_logging.py`.

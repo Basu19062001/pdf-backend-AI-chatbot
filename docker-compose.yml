@@ -5,7 +5,7 @@ services:
       dockerfile: app/Dockerfile
     container_name: pdf-chatbot-backend
     env_file:
-      - .env
+      - app/.env
     ports:
       - "8000:8000"
     volumes:

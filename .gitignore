@@ -12,6 +12,7 @@ ENV/
 # Environment files
 .env
 .env.*
+app/.env
 !.env.example
 !app/env/.env.example
 
@@ -38,6 +39,9 @@ pip-wheel-metadata/
 # Runtime and uploaded/generated app data
 uploads/*
 !uploads/.gitkeep
+app/logs/*.log
+app/logs/*.log.*
+!app/logs/.gitkeep
 
 # IDE and OS files
 .idea/

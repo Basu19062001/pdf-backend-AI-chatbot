@@ -7,11 +7,11 @@ UVICORN := $(BIN)/uvicorn
 APP_MODULE ?= app.main:app
 HOST ?= 0.0.0.0
 PORT ?= 8000
-ENV_FILE ?= .env
+ENV_FILE ?= app/.env
 REQUIREMENTS_FILE ?= app/backend/requirements.txt
-ENV_EXAMPLE := $(firstword $(wildcard .env.example app/env/.env.example))
+ENV_EXAMPLE := $(firstword $(wildcard app/env/.env.example .env.example))
 
-.PHONY: help venv install setup env run dev compile ci clean reset-db docker-build docker-up docker-down docker-logs
+.PHONY: help venv install setup env local run dev compile ci clean reset-db docker-build docker-up docker-down docker-logs
 
 help:
 	@echo "Available targets:"
@@ -19,6 +19,7 @@ help:
 	@echo "  make install    Install dependencies from $(REQUIREMENTS_FILE)"
 	@echo "  make env        Create $(ENV_FILE) from the example file if missing"
 	@echo "  make setup      Prepare venv, dependencies, and env file"
+	@echo "  make local      Run uvicorn locally with reload on 0.0.0.0"
 	@echo "  make run        Run the FastAPI app"
 	@echo "  make dev        Run the FastAPI app with reload"
 	@echo "  make compile    Compile-check the app package"
@@ -49,6 +50,13 @@ env:
 	fi
 
 setup: install env
+
+local:
+	@if [ -x "$(UVICORN)" ]; then \
+		"$(UVICORN)" "$(APP_MODULE)" --host "$(HOST)" --reload; \
+	else \
+		$(PYTHON) -m uvicorn "$(APP_MODULE)" --host "$(HOST)" --reload; \
+	fi
 
 run:
 	@if [ -x "$(UVICORN)" ]; then \
