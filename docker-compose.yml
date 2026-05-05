@@ -1,0 +1,18 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    container_name: pdf-chatbot-backend
+    env_file:
+      - app/.env
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+      - uploads_data:/app/uploads
+    restart: unless-stopped
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+volumes:
+  uploads_data:
