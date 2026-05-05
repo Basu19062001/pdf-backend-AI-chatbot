@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 import secrets
 
 from fastapi import Depends, FastAPI, HTTPException, status
@@ -8,6 +9,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from app.backend.api.router import api_router
 from app.core.config import settings
+from app.db import close_database, initialize_database
 from app.logger import get_logger, setup_logging
 from app.middleware.request_logging import RequestLoggingMiddleware
 
@@ -32,6 +34,17 @@ def verify_docs_access(
     )
 
 
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    logger.info("Initializing application resources.")
+    await initialize_database()
+    try:
+        yield
+    finally:
+        await close_database()
+        logger.info("Application resources shut down cleanly.")
+
+
 def create_application() -> FastAPI:
     app = FastAPI(
         title=settings.PROJECT_NAME,
@@ -41,6 +54,7 @@ def create_application() -> FastAPI:
         docs_url=None,
         redoc_url=None,
         debug=settings.DEBUG,
+        lifespan=lifespan,
     )
     app.include_router(api_router, prefix=settings.API_V1_STR)
     app.add_middleware(RequestLoggingMiddleware)
