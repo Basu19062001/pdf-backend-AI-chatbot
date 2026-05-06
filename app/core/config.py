@@ -49,6 +49,21 @@ class Settings(BaseSettings):
     REDOC_URL: str = "/redoc"
     OPENAPI_URL: str = "/openapi.json"
 
+    JWT_SECRET_KEY: str = "change-me-in-production-at-least-32chars"
+    JWT_ALGORITHM: str = "HS256"
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    JWT_ISSUER: str = "pdf-chatbot-backend"
+    JWT_AUDIENCE: str = "pdf-chatbot-clients"
+
+    REDIS_ENABLED: bool = True
+    REDIS_SCHEME: str = "redis"
+    REDIS_HOST: str = "localhost"
+    REDIS_PORT: int = 6379
+    REDIS_PASSWORD: str = ""
+    REDIS_DB: int = 0
+    REDIS_CONNECT_TIMEOUT: int = 5
+    REDIS_TOKEN_KEY_PREFIX: str = "auth:access"
+
     model_config = SettingsConfigDict(
         case_sensitive=False,
         extra="ignore",
@@ -76,6 +91,14 @@ class Settings(BaseSettings):
         "DB_NAME",
         "DOC_ROOT_USERNAME",
         "DOC_ROOT_PASSWORD",
+        "JWT_SECRET_KEY",
+        "JWT_ALGORITHM",
+        "JWT_ISSUER",
+        "JWT_AUDIENCE",
+        "REDIS_SCHEME",
+        "REDIS_HOST",
+        "REDIS_PASSWORD",
+        "REDIS_TOKEN_KEY_PREFIX",
         mode="before",
     )
     @classmethod
@@ -84,7 +107,7 @@ class Settings(BaseSettings):
             return value.strip().strip('"').strip("'")
         return value
 
-    @field_validator("DEBUG", "DB_ECHO", "DB_POOL_PRE_PING", "DOCS_ENABLED", mode="before")
+    @field_validator("DEBUG", "DB_ECHO", "DB_POOL_PRE_PING", "DOCS_ENABLED", "REDIS_ENABLED", mode="before")
     @classmethod
     def parse_boolish(cls, value: object) -> object:
         if isinstance(value, bool):
@@ -134,6 +157,24 @@ class Settings(BaseSettings):
             raise ValueError("DB_POOL_RECYCLE must be -1 or greater")
         if self.DB_CONNECT_TIMEOUT < 1:
             raise ValueError("DB_CONNECT_TIMEOUT must be greater than 0")
+        if len(self.JWT_SECRET_KEY.strip()) < 32:
+            raise ValueError("JWT_SECRET_KEY must be at least 32 characters long")
+        if self.JWT_ALGORITHM != "HS256":
+            raise ValueError("JWT_ALGORITHM must be 'HS256'")
+        if self.JWT_ACCESS_TOKEN_EXPIRE_MINUTES < 1:
+            raise ValueError("JWT_ACCESS_TOKEN_EXPIRE_MINUTES must be greater than 0")
+        if self.REDIS_SCHEME not in {"redis", "rediss"}:
+            raise ValueError("REDIS_SCHEME must be 'redis' or 'rediss'")
+        if not self.REDIS_HOST.strip():
+            raise ValueError("REDIS_HOST must not be empty")
+        if self.REDIS_PORT < 1:
+            raise ValueError("REDIS_PORT must be greater than 0")
+        if self.REDIS_DB < 0:
+            raise ValueError("REDIS_DB must be greater than or equal to 0")
+        if self.REDIS_CONNECT_TIMEOUT < 1:
+            raise ValueError("REDIS_CONNECT_TIMEOUT must be greater than 0")
+        if not self.REDIS_TOKEN_KEY_PREFIX.strip():
+            raise ValueError("REDIS_TOKEN_KEY_PREFIX must not be empty")
         return self
 
     @property
@@ -153,6 +194,20 @@ class Settings(BaseSettings):
         """
 
         return self.database_url
+
+    @property
+    def redis_url(self) -> str:
+        """
+        Redis URL composed from the individual Redis environment settings.
+
+        This mirrors the database configuration style so deployment environments
+        can provide Redis settings as discrete variables.
+        """
+
+        credentials = ""
+        if self.REDIS_PASSWORD:
+            credentials = f":{self.REDIS_PASSWORD}@"
+        return f"{self.REDIS_SCHEME}://{credentials}{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
 
 
 @lru_cache()

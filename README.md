@@ -436,6 +436,14 @@ flowchart TD
 - `POST /api/v1/documents/`
 - `GET /api/v1/documents/{document_id}`
 
+### Auth
+
+- `POST /api/v1/auth/signup`
+- `POST /api/v1/auth/login`
+- `GET /api/v1/auth/me`
+- `GET /api/v1/auth/sessions`
+- `POST /api/v1/auth/logout`
+
 ### Chats
 
 - `GET /api/v1/chats/sessions`
@@ -486,6 +494,19 @@ Use `app/env/.env.example` as the base template.
 | `DOCS_ENABLED` | Enables authenticated docs routes |
 | `DOC_ROOT_USERNAME` | Docs basic auth username |
 | `DOC_ROOT_PASSWORD` | Docs basic auth password |
+| `JWT_SECRET_KEY` | Secret used to sign access tokens |
+| `JWT_ALGORITHM` | JWT signing algorithm, currently `HS256` |
+| `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | Access token lifetime in minutes |
+| `JWT_ISSUER` | Expected JWT issuer claim |
+| `JWT_AUDIENCE` | Expected JWT audience claim |
+| `REDIS_ENABLED` | Enables Redis-backed token storage with DB fallback |
+| `REDIS_SCHEME` | `redis` or `rediss` |
+| `REDIS_HOST` | Redis host |
+| `REDIS_PORT` | Redis port |
+| `REDIS_PASSWORD` | Redis password if authentication is enabled |
+| `REDIS_DB` | Redis database index |
+| `REDIS_CONNECT_TIMEOUT` | Redis connection timeout in seconds |
+| `REDIS_TOKEN_KEY_PREFIX` | Redis key prefix for access-token sessions |
 
 ### Notes On Config Behavior
 
@@ -499,6 +520,7 @@ Use `app/env/.env.example` as the base template.
 
 - Python 3.12
 - PostgreSQL 14+ or compatible
+- Redis Stack or compatible Redis server
 - A database matching the values in `app/.env`
 
 ### Setup
@@ -510,7 +532,7 @@ pip install -r app/backend/requirements.txt
 cp app/env/.env.example app/.env
 ```
 
-Update `app/.env` to point at a live PostgreSQL instance before starting the app.
+Update `app/.env` to point at a live PostgreSQL instance and Redis instance before starting the app.
 
 ### Database Migration Setup
 
