@@ -62,5 +62,5 @@ class ChatMessage(Base):
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=default_timezone, nullable=False)
 
-    chat_session = relationship("ChatSession", back_populates="messages")
+    session = relationship("ChatSession", back_populates="messages")
     sources = relationship("MessageSource", back_populates="message", cascade="all, delete-orphan")

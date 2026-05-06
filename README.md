@@ -436,6 +436,12 @@ flowchart TD
 - `POST /api/v1/documents/`
 - `GET /api/v1/documents/{document_id}`
 
+### Auth
+
+- `POST /api/v1/auth/signup`
+- `POST /api/v1/auth/login`
+- `GET /api/v1/auth/me`
+
 ### Chats
 
 - `GET /api/v1/chats/sessions`
@@ -486,6 +492,11 @@ Use `app/env/.env.example` as the base template.
 | `DOCS_ENABLED` | Enables authenticated docs routes |
 | `DOC_ROOT_USERNAME` | Docs basic auth username |
 | `DOC_ROOT_PASSWORD` | Docs basic auth password |
+| `JWT_SECRET_KEY` | Secret used to sign access tokens |
+| `JWT_ALGORITHM` | JWT signing algorithm, currently `HS256` |
+| `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | Access token lifetime in minutes |
+| `JWT_ISSUER` | Expected JWT issuer claim |
+| `JWT_AUDIENCE` | Expected JWT audience claim |
 
 ### Notes On Config Behavior
 

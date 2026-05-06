@@ -49,6 +49,12 @@ class Settings(BaseSettings):
     REDOC_URL: str = "/redoc"
     OPENAPI_URL: str = "/openapi.json"
 
+    JWT_SECRET_KEY: str = "change-me-in-production-at-least-32chars"
+    JWT_ALGORITHM: str = "HS256"
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    JWT_ISSUER: str = "pdf-chatbot-backend"
+    JWT_AUDIENCE: str = "pdf-chatbot-clients"
+
     model_config = SettingsConfigDict(
         case_sensitive=False,
         extra="ignore",
@@ -76,6 +82,10 @@ class Settings(BaseSettings):
         "DB_NAME",
         "DOC_ROOT_USERNAME",
         "DOC_ROOT_PASSWORD",
+        "JWT_SECRET_KEY",
+        "JWT_ALGORITHM",
+        "JWT_ISSUER",
+        "JWT_AUDIENCE",
         mode="before",
     )
     @classmethod
@@ -134,6 +144,12 @@ class Settings(BaseSettings):
             raise ValueError("DB_POOL_RECYCLE must be -1 or greater")
         if self.DB_CONNECT_TIMEOUT < 1:
             raise ValueError("DB_CONNECT_TIMEOUT must be greater than 0")
+        if len(self.JWT_SECRET_KEY.strip()) < 32:
+            raise ValueError("JWT_SECRET_KEY must be at least 32 characters long")
+        if self.JWT_ALGORITHM != "HS256":
+            raise ValueError("JWT_ALGORITHM must be 'HS256'")
+        if self.JWT_ACCESS_TOKEN_EXPIRE_MINUTES < 1:
+            raise ValueError("JWT_ACCESS_TOKEN_EXPIRE_MINUTES must be greater than 0")
         return self
 
     @property
