@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import HTTPException, status
 from redis.exceptions import RedisError
 from sqlalchemy import delete, select
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.cache import get_redis_client
@@ -20,6 +20,7 @@ from app.models.user import User
 from app.models.user_auth_session import UserAuthSession
 
 logger = get_logger(__name__)
+AUTH_SESSION_TABLE_NAME = "user_auth_sessions"
 
 
 @dataclass(slots=True)
@@ -79,6 +80,13 @@ class AuthSessionService:
             await self.session.refresh(session_row)
         except SQLAlchemyError as exc:
             await self.session.rollback()
+            if self._is_missing_auth_session_table(exc):
+                logger.warning(
+                    "Auth session storage table '%s' is missing during login for user '%s'.",
+                    AUTH_SESSION_TABLE_NAME,
+                    user.id,
+                )
+                raise self._auth_session_table_missing_http_error() from exc
             logger.exception("Failed to persist aggregated auth sessions for user '%s'.", user.id)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -157,6 +165,13 @@ class AuthSessionService:
                 select(UserAuthSession).where(UserAuthSession.user_id == user_id)
             )
         except SQLAlchemyError as exc:
+            if self._is_missing_auth_session_table(exc):
+                logger.warning(
+                    "Auth session storage table '%s' is missing while listing sessions for user '%s'.",
+                    AUTH_SESSION_TABLE_NAME,
+                    user_id,
+                )
+                raise self._auth_session_table_missing_http_error() from exc
             logger.exception("Failed to list auth sessions for user '%s'.", user_id)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -223,6 +238,13 @@ class AuthSessionService:
             await self.session.commit()
         except SQLAlchemyError as exc:
             await self.session.rollback()
+            if self._is_missing_auth_session_table(exc):
+                logger.warning(
+                    "Auth session storage table '%s' is missing while deleting nested session '%s'.",
+                    AUTH_SESSION_TABLE_NAME,
+                    session_id,
+                )
+                raise self._auth_session_table_missing_http_error() from exc
             logger.exception("Failed to delete nested auth session '%s' from DB.", session_id)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -262,8 +284,15 @@ class AuthSessionService:
             if deleted_sessions:
                 logger.info("Purged %s expired nested auth sessions from the database.", deleted_sessions)
             return deleted_sessions
-        except SQLAlchemyError:
+        except SQLAlchemyError as exc:
             await self.session.rollback()
+            if self._is_missing_auth_session_table(exc):
+                logger.warning(
+                    "Auth session storage table '%s' is missing during expired-session purge. "
+                    "Apply the auth session migrations before using auth sessions.",
+                    AUTH_SESSION_TABLE_NAME,
+                )
+                return 0
             logger.exception("Failed to purge expired nested auth sessions.")
             return 0
 
@@ -283,6 +312,13 @@ class AuthSessionService:
                 select(UserAuthSession).where(UserAuthSession.user_id == user_id)
             )
         except SQLAlchemyError as exc:
+            if self._is_missing_auth_session_table(exc):
+                logger.warning(
+                    "Auth session storage table '%s' is missing while loading user '%s' auth row.",
+                    AUTH_SESSION_TABLE_NAME,
+                    user_id,
+                )
+                raise self._auth_session_table_missing_http_error() from exc
             logger.exception("Failed to load aggregated auth-session row for user '%s'.", user_id)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -297,6 +333,13 @@ class AuthSessionService:
             result = await self.session.scalars(select(UserAuthSession))
             session_rows = list(result.all())
         except SQLAlchemyError as exc:
+            if self._is_missing_auth_session_table(exc):
+                logger.warning(
+                    "Auth session storage table '%s' is missing while scanning for nested session '%s'.",
+                    AUTH_SESSION_TABLE_NAME,
+                    session_id,
+                )
+                raise self._auth_session_table_missing_http_error() from exc
             logger.exception("Failed to scan aggregated auth-session rows for nested session '%s'.", session_id)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -438,3 +481,19 @@ class AuthSessionService:
 
     def _remaining_seconds(self, expires_at: datetime) -> int:
         return max(1, int((expires_at - datetime.now(timezone.utc)).total_seconds()))
+
+    def _is_missing_auth_session_table(self, exc: SQLAlchemyError) -> bool:
+        if not isinstance(exc, ProgrammingError):
+            return False
+
+        message = str(exc).lower()
+        return AUTH_SESSION_TABLE_NAME in message and "does not exist" in message
+
+    def _auth_session_table_missing_http_error(self) -> HTTPException:
+        return HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Authentication session storage is not initialized. "
+                "Run the latest database migrations and try again."
+            ),
+        )
