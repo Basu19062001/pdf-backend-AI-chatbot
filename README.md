@@ -10,7 +10,7 @@ This repository is best described as a production-shaped backend scaffold rather
 - The app requires a reachable PostgreSQL database at startup because `/api/v1/health` and the application lifespan both use a real database ping.
 - The `DocumentService` and `ChatService` routes currently use in-memory stores, not the SQLAlchemy models.
 - PDF parsing, chunking, embedding generation, Pinecone upserts, and LLM answering are still stub implementations in `app/services/`.
-- There is no migration system yet such as Alembic.
+- Alembic is configured and the initial schema migration is available in `alembic/versions/3bd016ede9f5_initial_schema.py`.
 
 That distinction matters: the README below documents both the current runtime behavior and the intended production architecture represented by the models and service boundaries.
 
@@ -58,9 +58,10 @@ mindmap
       Generate answer
     Current State
       DB connectivity is live
+      Alembic initial schema is present
       Route services are in-memory
       AI services are stubs
-      Migrations are missing
+      Runtime flows are not DB-backed yet
 ```
 
 ## Backend Architecture
@@ -411,6 +412,11 @@ flowchart TD
 │   ├── logs/
 │   ├── Dockerfile
 │   └── main.py
+├── alembic/
+│   ├── env.py
+│   ├── script.py.mako
+│   └── versions/
+├── alembic.ini
 ├── .github/workflows/backend-ci.yml
 ├── docker-compose.yml
 ├── Makefile
@@ -506,6 +512,23 @@ cp app/env/.env.example app/.env
 
 Update `app/.env` to point at a live PostgreSQL instance before starting the app.
 
+### Database Migration Setup
+
+Apply the initial schema before running the app against a fresh database:
+
+```bash
+make migrate-up
+```
+
+Useful migration commands:
+
+```bash
+make migrate-current
+make migrate-history
+make migration MESSAGE="describe your schema change"
+make migrate-down
+```
+
 ### Run
 
 ```bash
@@ -518,6 +541,8 @@ Or use the project Make targets:
 make setup
 make dev
 ```
+
+If you are starting from an empty database, run `make migrate-up` after `make setup` and before `make dev`.
 
 ### Make Targets
 
