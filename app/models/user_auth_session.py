@@ -14,7 +14,7 @@ class UserAuthSession(Base):
     __table_args__ = (
         CheckConstraint(
             "jsonb_typeof(active_sessions) = 'array'",
-            name="user_auth_session_active_sessions_array_check",
+            name="active_sessions_array_check",
         ),
     )
 

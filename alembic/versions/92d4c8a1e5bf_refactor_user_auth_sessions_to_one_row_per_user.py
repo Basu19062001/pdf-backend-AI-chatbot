@@ -33,7 +33,7 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint(
             "jsonb_typeof(active_sessions) = 'array'",
-            name=op.f("ck_user_auth_sessions_v2_user_auth_session_active_sessions_array_check"),
+            name=op.f("ck_user_auth_sessions_v2_active_sessions_array_check"),
         ),
         sa.ForeignKeyConstraint(
             ["user_id"],
@@ -105,7 +105,7 @@ def upgrade() -> None:
         "ALTER TABLE user_auth_sessions RENAME CONSTRAINT fk_user_auth_sessions_v2_user_id_users TO fk_user_auth_sessions_user_id_users"
     )
     op.execute(
-        "ALTER TABLE user_auth_sessions RENAME CONSTRAINT ck_user_auth_sessions_v2_user_auth_session_active_sessions_array_check TO ck_user_auth_sessions_user_auth_session_active_sessions_array_check"
+        "ALTER TABLE user_auth_sessions RENAME CONSTRAINT ck_user_auth_sessions_v2_active_sessions_array_check TO ck_user_auth_sessions_active_sessions_array_check"
     )
     op.alter_column("user_auth_sessions", "active_sessions", server_default=None)
 
