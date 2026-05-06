@@ -1,2 +1,8 @@
-"""Model package placeholder."""
 from app.models.user import User
+from app.models.document import Document
+from app.models.document_chunk import DocumentChunk
+from app.models.chat_session import ChatSession
+from app.models.chat_message import ChatMessage
+from app.models.message_source import MessageSource
+from app.models.document_processing_log import DocumentProcessingLog
+from app.models.usage_log import UsageLog
