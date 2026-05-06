@@ -1,137 +1,599 @@
-# PDF Chatbot Backend
+# PDF Backend AI Chatbot
 
-Production-style modular monolith backend scaffold for a PDF chatbot system.
+FastAPI backend for a PDF chat system with a production-oriented project structure, async PostgreSQL configuration, protected API documentation, structured logging, and a domain model for document ingestion and retrieval-augmented chat.
 
-## Structure
+## Current State
+
+This repository is best described as a production-shaped backend scaffold rather than a fully production-complete application.
+
+- The FastAPI app, configuration, logging, Docker setup, CI workflow, and SQLAlchemy models are in place.
+- The app requires a reachable PostgreSQL database at startup because `/api/v1/health` and the application lifespan both use a real database ping.
+- The `DocumentService` and `ChatService` routes currently use in-memory stores, not the SQLAlchemy models.
+- PDF parsing, chunking, embedding generation, Pinecone upserts, and LLM answering are still stub implementations in `app/services/`.
+- There is no migration system yet such as Alembic.
+
+That distinction matters: the README below documents both the current runtime behavior and the intended production architecture represented by the models and service boundaries.
+
+## Tech Stack
+
+- Python 3.12
+- FastAPI
+- Uvicorn
+- SQLAlchemy 2.0 async
+- PostgreSQL via `asyncpg`
+- Pydantic v2
+- Docker and Docker Compose
+- GitHub Actions for CI
+
+## System Overview
+
+```mermaid
+mindmap
+  root((PDF Backend AI Chatbot))
+    API Layer
+      Health routes
+      Document routes
+      Chat routes
+      Protected docs
+    Service Layer
+      DocumentService
+      ChatService
+      PDFService
+      ChunkService
+      EmbeddingService
+      PineconeService
+      LLMService
+    Data Layer
+      PostgreSQL
+      SQLAlchemy models
+      Usage logs
+      Processing logs
+    Retrieval Workflow
+      Upload PDF
+      Parse content
+      Split into chunks
+      Create embeddings
+      Store vectors
+      Retrieve context
+      Generate answer
+    Current State
+      DB connectivity is live
+      Route services are in-memory
+      AI services are stubs
+      Migrations are missing
+```
+
+## Backend Architecture
+
+```mermaid
+flowchart TD
+    Client[Frontend or API Client]
+    Docs[Protected API Docs]
+
+    subgraph App[FastAPI Backend]
+        Main[app/main.py]
+        Middleware[Request Logging Middleware]
+        Router[API Router]
+
+        subgraph Routes[Route Layer]
+            Health[Health Routes]
+            Documents[Document Routes]
+            Chats[Chat Routes]
+        end
+
+        subgraph Services[Service Layer]
+            DocumentService[DocumentService]
+            ChatService[ChatService]
+            PDFService[PDFService]
+            ChunkService[ChunkService]
+            EmbeddingService[EmbeddingService]
+            PineconeService[PineconeService]
+            LLMService[LLMService]
+        end
+
+        subgraph Data[Data and Infra]
+            Postgres[(PostgreSQL)]
+            InMemoryDocs[(In-Memory Document Store)]
+            InMemoryChats[(In-Memory Chat Store)]
+            Logs[(Rotating App Logs)]
+        end
+    end
+
+    Client --> Main
+    Client --> Docs
+    Docs --> Main
+    Main --> Middleware
+    Middleware --> Router
+    Router --> Health
+    Router --> Documents
+    Router --> Chats
+
+    Health --> Postgres
+    Documents --> DocumentService
+    Chats --> ChatService
+
+    DocumentService -. current implementation .-> InMemoryDocs
+    ChatService -. current implementation .-> InMemoryChats
+
+    DocumentService -. target pipeline .-> PDFService
+    PDFService --> ChunkService
+    ChunkService --> EmbeddingService
+    EmbeddingService --> PineconeService
+    ChatService -. target retrieval .-> PineconeService
+    ChatService -. target generation .-> LLMService
+
+    Main --> Logs
+    Middleware --> Logs
+```
+
+## Request Flow
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant FastAPI
+    participant Middleware
+    participant Route
+    participant Service
+    participant DB as PostgreSQL
+    participant Vector as Pinecone
+    participant LLM
+
+    Client->>FastAPI: HTTP request
+    FastAPI->>Middleware: enter request pipeline
+    Middleware->>Route: dispatch route
+
+    alt Health check
+        Route->>DB: SELECT 1
+        DB-->>Route: ok
+        Route-->>Middleware: health response
+    else Current document or chat routes
+        Route->>Service: execute business action
+        Service-->>Route: in-memory response
+        Route-->>Middleware: API response
+    else Target RAG chat flow
+        Route->>Service: user message
+        Service->>Vector: retrieve relevant chunks
+        Vector-->>Service: chunk matches
+        Service->>LLM: prompt with context
+        LLM-->>Service: grounded answer
+        Service->>DB: persist metadata and usage
+        DB-->>Service: committed
+        Service-->>Route: final response
+        Route-->>Middleware: API response
+    end
+
+    Middleware-->>Client: response + request log
+```
+
+## Database Architecture
+
+```mermaid
+erDiagram
+    USERS ||--o{ DOCUMENTS : owns
+    USERS ||--o{ CHAT_SESSIONS : starts
+    USERS ||--o{ USAGE_LOGS : generates
+    DOCUMENTS ||--o{ DOCUMENT_CHUNKS : contains
+    DOCUMENTS ||--o{ DOCUMENT_PROCESSING_LOGS : records
+    DOCUMENTS ||--o{ CHAT_SESSIONS : scopes
+    DOCUMENTS ||--o{ USAGE_LOGS : attributes
+    CHAT_SESSIONS ||--o{ CHAT_MESSAGES : contains
+    CHAT_SESSIONS ||--o{ USAGE_LOGS : attributes
+    CHAT_MESSAGES ||--o{ MESSAGE_SOURCES : cites
+    DOCUMENT_CHUNKS ||--o{ MESSAGE_SOURCES : supports
+
+    USERS {
+        uuid id PK
+        string full_name
+        string email UK
+        string password_hash
+        string role
+        boolean is_active
+        datetime created_at
+        datetime updated_at
+    }
+
+    DOCUMENTS {
+        uuid id PK
+        uuid user_id FK
+        string title
+        string original_file_name
+        string stored_file_name
+        string file_path
+        string file_url
+        string file_type
+        bigint file_size_bytes
+        int total_pages
+        string status
+        text error_message
+        datetime uploaded_at
+        datetime processed_at
+        datetime created_at
+        datetime updated_at
+    }
+
+    DOCUMENT_CHUNKS {
+        uuid id PK
+        uuid document_id FK
+        string pinecone_vector_id UK
+        int chunk_index
+        int page_number_start
+        int page_number_end
+        text chunk_text
+        int token_count
+        string embedding_model
+        datetime created_at
+    }
+
+    DOCUMENT_PROCESSING_LOGS {
+        uuid id PK
+        uuid document_id FK
+        string step_name
+        string status
+        text message
+        datetime started_at
+        datetime completed_at
+        datetime created_at
+    }
+
+    CHAT_SESSIONS {
+        uuid id PK
+        uuid user_id FK
+        uuid document_id FK
+        string title
+        string status
+        datetime started_at
+        datetime last_message_at
+        datetime created_at
+        datetime updated_at
+    }
+
+    CHAT_MESSAGES {
+        uuid id PK
+        uuid chat_session_id FK
+        string role
+        text content
+        string llm_model
+        int prompt_tokens
+        int completion_tokens
+        int total_tokens
+        decimal estimated_cost
+        datetime created_at
+    }
+
+    MESSAGE_SOURCES {
+        uuid id PK
+        uuid message_id FK
+        uuid chunk_id FK
+        int source_rank
+        float similarity_score
+        int page_number_start
+        int page_number_end
+        text quoted_text
+        datetime created_at
+    }
+
+    USAGE_LOGS {
+        uuid id PK
+        uuid user_id FK
+        uuid document_id FK
+        uuid session_id FK
+        string action_type
+        string provider
+        string model_name
+        int input_tokens
+        int output_tokens
+        int total_tokens
+        decimal cost
+        datetime created_at
+    }
+```
+
+## Database Lifecycle
+
+```mermaid
+flowchart LR
+    User[users]
+    Document[documents]
+    Chunk[document_chunks]
+    Processing[document_processing_logs]
+    Session[chat_sessions]
+    Message[chat_messages]
+    Source[message_sources]
+    Usage[usage_logs]
+    Vector[(pinecone_vector_id)]
+
+    User --> Document
+    User --> Session
+    User --> Usage
+    Document --> Chunk
+    Document --> Processing
+    Document --> Session
+    Document --> Usage
+    Session --> Message
+    Session --> Usage
+    Message --> Source
+    Chunk --> Source
+    Chunk --> Vector
+```
+
+## Document Processing Architecture
+
+```mermaid
+flowchart LR
+    Upload[PDF Upload or Stored File]
+    DocumentRow[documents]
+    ProcessLogs[document_processing_logs]
+    PDFParse[PDF parsing]
+    Chunking[Text chunking]
+    Embeddings[Embedding generation]
+    Pinecone[Pinecone upsert]
+    ChunkRows[document_chunks]
+
+    Upload --> DocumentRow
+    DocumentRow --> ProcessLogs
+    DocumentRow --> PDFParse
+    PDFParse --> Chunking
+    Chunking --> Embeddings
+    Embeddings --> Pinecone
+    Chunking --> ChunkRows
+    Pinecone --> ChunkRows
+```
+
+## Chat And Citation Architecture
+
+```mermaid
+flowchart LR
+    Session[chat_sessions]
+    UserMsg[User message]
+    Retrieve[Retrieve related chunks]
+    Chunks[document_chunks]
+    Generate[LLM answer generation]
+    AssistantMsg[chat_messages]
+    Sources[message_sources]
+    Usage[usage_logs]
+
+    Session --> UserMsg
+    UserMsg --> Retrieve
+    Retrieve --> Chunks
+    Chunks --> Generate
+    Generate --> AssistantMsg
+    Chunks --> Sources
+    AssistantMsg --> Sources
+    AssistantMsg --> Usage
+```
+
+## Target Processing Pipeline
+
+```mermaid
+flowchart TD
+    Upload[POST /api/v1/documents]
+    Persist[Store document metadata]
+    Worker[Background processing job]
+    Parse[PDFService]
+    Split[ChunkService]
+    Embed[EmbeddingService]
+    Upsert[PineconeService]
+    SaveChunks[Persist document_chunks]
+    Ask[POST /api/v1/chats/sessions/{id}/messages]
+    Retrieve[Retrieve relevant chunks]
+    Answer[LLMService]
+    SaveMessage[Persist chat_messages]
+    SaveSources[Persist message_sources]
+    SaveUsage[Persist usage_logs]
+    Return[API response]
+
+    Upload --> Persist --> Worker --> Parse --> Split --> Embed --> Upsert --> SaveChunks
+    Ask --> Retrieve --> Answer --> SaveMessage --> SaveSources --> SaveUsage --> Return
+    SaveChunks --> Retrieve
+```
+
+## Project Structure
 
 ```text
-pdf-chatbot-backend/
+.
 ├── app/
-│   ├── .env
-│   ├── backend/
-│   │   ├── api/
-│   │   └── requirements.txt
+│   ├── backend/api/
+│   │   ├── dependencies.py
+│   │   ├── router.py
+│   │   └── routes/
 │   ├── core/
-│   │   └── config.py
+│   │   ├── config.py
+│   │   └── logging.py
+│   ├── db/
+│   │   ├── base.py
+│   │   └── session.py
+│   ├── middleware/
+│   │   └── request_logging.py
+│   ├── models/
 │   ├── schemas/
 │   ├── services/
-│   ├── utils/
+│   ├── logs/
+│   ├── Dockerfile
 │   └── main.py
-├── uploads/
-├── .github/
-├── Makefile
+├── .github/workflows/backend-ci.yml
 ├── docker-compose.yml
+├── Makefile
 └── README.md
 ```
 
-## Run
+## API Surface
+
+### Health
+
+- `GET /health`: lightweight root health check that does not hit the database.
+- `GET /api/v1/health`: application health check that pings PostgreSQL.
+
+### Documents
+
+- `GET /api/v1/documents/`
+- `POST /api/v1/documents/`
+- `GET /api/v1/documents/{document_id}`
+
+### Chats
+
+- `GET /api/v1/chats/sessions`
+- `POST /api/v1/chats/sessions`
+- `GET /api/v1/chats/sessions/{session_id}`
+- `POST /api/v1/chats/sessions/{session_id}/messages`
+
+### Documentation Endpoints
+
+FastAPI’s default public docs are disabled and recreated behind HTTP Basic auth.
+
+- `GET /docs`
+- `GET /redoc`
+- `GET /openapi.json`
+
+Docs are enabled only when `DOCS_ENABLED=true`.
+
+## Configuration
+
+Settings are loaded from `app/.env` via `pydantic-settings`.
+
+Use `app/env/.env.example` as the base template.
+
+### Important Environment Variables
+
+| Variable | Purpose |
+| --- | --- |
+| `PROJECT_NAME` | FastAPI application title |
+| `PROJECT_DESCRIPTION` | OpenAPI description |
+| `VERSION` | API version |
+| `ENVIRONMENT` | Runtime environment label |
+| `DEBUG` | Enables debug mode and more verbose behavior |
+| `LOG_LEVEL` | Project log level |
+| `API_V1_STR` | API version prefix, default `/api/v1` |
+| `DB_SCHEME` | `postgresql+asyncpg` or `postgresql` |
+| `DB_USERNAME` | PostgreSQL username |
+| `DB_PASSWORD` | PostgreSQL password |
+| `DB_HOST` | PostgreSQL host |
+| `DB_PORT` | PostgreSQL port |
+| `DB_NAME` | PostgreSQL database name |
+| `DB_ECHO` | SQLAlchemy SQL logging toggle |
+| `DB_POOL_SIZE` | Connection pool size |
+| `DB_MAX_OVERFLOW` | Overflow connection count |
+| `DB_POOL_TIMEOUT` | Pool wait timeout |
+| `DB_POOL_RECYCLE` | Connection recycle interval |
+| `DB_POOL_PRE_PING` | Enables stale-connection checks |
+| `DB_CONNECT_TIMEOUT` | Initial DB connection timeout |
+| `DOCS_ENABLED` | Enables authenticated docs routes |
+| `DOC_ROOT_USERNAME` | Docs basic auth username |
+| `DOC_ROOT_PASSWORD` | Docs basic auth password |
+
+### Notes On Config Behavior
+
+- `ALLOWED_ORIGINS` exists in settings but CORS middleware is not currently attached in `app/main.py`.
+- `DOCS_USERNAME` and `DOCS_PASSWORD` are accepted as legacy aliases and mapped to `DOC_ROOT_USERNAME` and `DOC_ROOT_PASSWORD`.
+- `DB_SCHEME=postgresql` is normalized internally to `postgresql+asyncpg`.
+
+## Local Development
+
+### Prerequisites
+
+- Python 3.12
+- PostgreSQL 14+ or compatible
+- A database matching the values in `app/.env`
+
+### Setup
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -r app/backend/requirements.txt
 cp app/env/.env.example app/.env
-uvicorn app.main:app --reload
 ```
 
-Or use `make`:
+Update `app/.env` to point at a live PostgreSQL instance before starting the app.
+
+### Run
+
+```bash
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+Or use the project Make targets:
 
 ```bash
 make setup
 make dev
 ```
 
+### Make Targets
+
+- `make setup`: create venv, install dependencies, and create `app/.env` if missing
+- `make dev`: run Uvicorn with reload
+- `make run`: run Uvicorn without reload
+- `make compile`: compile-check the `app` package
+- `make ci`: install deps, run `pip check`, compile sources, and import the FastAPI app
+- `make docker-build`: build the container image
+- `make docker-up`: start the service with Docker Compose
+- `make docker-down`: stop Docker Compose services
+- `make docker-logs`: tail backend container logs
+
 ## Docker
+
+The repository includes a single backend container definition.
 
 ```bash
 cp app/env/.env.example app/.env
 docker compose up --build
 ```
 
-The Dockerfile lives at `app/Dockerfile`, while `docker-compose.yml` stays at the project root so it can use the whole repository as build context.
+Important operational note:
 
-Or with `make`:
+- `docker-compose.yml` only starts the backend container.
+- It does not provision PostgreSQL, Pinecone, or any LLM dependency.
+- The backend will fail startup if `DB_HOST`, `DB_PORT`, and credentials do not point to a reachable PostgreSQL instance.
 
-```bash
-make docker-build
-make docker-up
-```
+## Logging And Observability
 
-## CI and Branch Protection
+Logging is one of the stronger production-oriented parts of this codebase.
 
-GitHub Actions is the right choice here. The workflow is defined in `.github/workflows/backend-ci.yml` and runs on both:
+- Logs are configured centrally in `app/logger.py`.
+- Console and file logging are asynchronous via `QueueHandler` and `QueueListener`.
+- Application logs rotate daily and keep 30 backups.
+- Service-specific JSON loggers can be created via `get_service_logger(...)`.
+- Request logging middleware records request start, completion time, and status code.
+- Exceptions during request handling are logged with stack traces.
 
-- pushes to `main` and `development`
-- pull requests targeting `main` and `development`
+Log files are written under `app/logs/`.
 
-Current CI checks:
+## CI
 
-- install Python dependencies from `app/backend/requirements.txt`
-- validate dependencies with `pip check`
-- compile the `app` package
-- smoke-test the FastAPI app import
+GitHub Actions workflow: `.github/workflows/backend-ci.yml`
 
-Dependency caching:
+It currently performs:
 
-- GitHub Actions caches `pip` downloads using `app/backend/requirements.txt` as the cache key source
-- Docker now reuses a persistent pip cache during image builds
-- local `pip install` also reuses the normal pip cache unless you clear it manually
+- dependency installation
+- `pip check`
+- Python compile validation with `compileall`
+- a smoke import of `app.main:app`
 
-Run the same checks locally with:
+This is useful as a baseline, but it is not yet a full production verification pipeline because there are no automated unit, integration, or migration tests.
 
-```bash
-make ci
-```
+## Known Gaps Before True Production Readiness
 
-Important: a workflow alone cannot stop an already completed direct push. To make CI truly block bad code from landing in `main` or `development`, configure GitHub branch protection:
+These are the highest-impact items still missing from the codebase itself:
 
-1. Go to `GitHub -> Settings -> Branches`.
-2. Add a branch protection rule for `main`.
-3. Add another rule for `development`.
-4. Enable `Require a pull request before merging`.
-5. Enable `Require status checks to pass before merging`.
-6. Select the status check named `backend-ci`.
-7. Optionally enable `Require approvals` and `Restrict who can push to matching branches`.
+1. Replace the in-memory document and chat services with repository-backed database logic.
+2. Add migrations with Alembic and create the actual database schema from `app/models/`.
+3. Implement real PDF extraction, chunking, embeddings, vector search, and LLM orchestration.
+4. Add authentication and authorization for end users, not just docs protection.
+5. Add file upload handling and object storage strategy for PDFs.
+6. Add CORS middleware if a browser frontend will call this API.
+7. Add automated tests for services, routes, DB integration, and failure paths.
+8. Add background job orchestration for document processing.
 
-Recommended workflow:
+## Summary
 
-- create feature branches from `development`
-- open a pull request into `development`
-- let CI pass before merge
-- promote tested changes from `development` into `main` through another pull request
+This repository already has a solid backbone for a modular PDF chat backend:
 
-## Available Endpoints
+- clean FastAPI structure
+- strong config validation
+- async PostgreSQL engine management
+- a well-designed relational schema
+- protected docs
+- meaningful logging and CI scaffolding
 
-- `GET /api/v1/health`
-- `GET /api/v1/documents/`
-- `POST /api/v1/documents/`
-- `GET /api/v1/documents/{document_id}`
-- `GET /api/v1/chats/sessions`
-- `POST /api/v1/chats/sessions`
-- `GET /api/v1/chats/sessions/{session_id}`
-- `POST /api/v1/chats/sessions/{session_id}/messages`
-- `GET /docs` protected with HTTP Basic auth
-- `GET /redoc` protected with HTTP Basic auth
-- `GET /openapi.json` protected with HTTP Basic auth
-
-## Docs Security
-
-FastAPI's default public docs are disabled. Documentation endpoints are recreated with HTTP Basic authentication and configured from `app/.env`.
-
-Example variables:
-
-```env
-DOCS_ENABLED=true
-DOCS_USERNAME=admin
-DOCS_PASSWORD=change-this-password
-DOCS_URL=/docs
-REDOC_URL=/redoc
-OPENAPI_URL=/openapi.json
-```
-
-## Notes
-
-- The current implementation focuses on production-grade structure and separation of concerns.
-- Service implementations for PDF parsing, embeddings, vector storage, and LLM responses are intentionally stubbed and ready to be replaced with real integrations.
-- SQLite is the default local database for quick startup, but the app structure is ready for a stronger production database setup.
-- Logging is centralized in `app/logger.py` and request logging middleware lives in `app/middleware/request_logging.py`.
+What it does not yet have is the final implementation wiring between the API, the database models, and the AI document-processing pipeline. The README now reflects that reality directly so future contributors can build on it safely.

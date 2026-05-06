@@ -4,14 +4,16 @@ BIN := $(VENV)/bin
 PIP := $(BIN)/pip
 PYTHON_BIN := $(BIN)/python
 UVICORN := $(BIN)/uvicorn
+ALEMBIC := $(BIN)/alembic
 APP_MODULE ?= app.main:app
 HOST ?= 0.0.0.0
 PORT ?= 8000
 ENV_FILE ?= app/.env
 REQUIREMENTS_FILE ?= app/backend/requirements.txt
 ENV_EXAMPLE := $(firstword $(wildcard app/env/.env.example .env.example))
+MESSAGE ?= init
 
-.PHONY: help venv install setup env local run dev compile ci clean reset-db docker-build docker-up docker-down docker-logs
+.PHONY: help venv install setup env local run dev compile ci clean reset-db docker-build docker-up docker-down docker-logs migration migrate-up migrate-down migrate-current migrate-history migrate-heads
 
 help:
 	@echo "Available targets:"
@@ -30,6 +32,12 @@ help:
 	@echo "  make docker-up     Start the app with docker compose"
 	@echo "  make docker-down   Stop docker compose services"
 	@echo "  make docker-logs   Tail docker compose logs"
+	@echo "  make migration MESSAGE=\"create users table\"  Autogenerate a new Alembic revision"
+	@echo "  make migrate-up    Apply migrations up to head"
+	@echo "  make migrate-down  Roll back the latest migration"
+	@echo "  make migrate-current  Show the current revision"
+	@echo "  make migrate-history  Show migration history"
+	@echo "  make migrate-heads    Show current heads"
 
 venv:
 	$(PYTHON) -m venv $(VENV)
@@ -108,3 +116,45 @@ docker-down:
 
 docker-logs:
 	docker compose logs -f backend
+
+migration:
+	@if [ -x "$(ALEMBIC)" ]; then \
+		"$(ALEMBIC)" revision --autogenerate -m "$(MESSAGE)"; \
+	else \
+		$(PYTHON) -m alembic revision --autogenerate -m "$(MESSAGE)"; \
+	fi
+
+migrate-up:
+	@if [ -x "$(ALEMBIC)" ]; then \
+		"$(ALEMBIC)" upgrade head; \
+	else \
+		$(PYTHON) -m alembic upgrade head; \
+	fi
+
+migrate-down:
+	@if [ -x "$(ALEMBIC)" ]; then \
+		"$(ALEMBIC)" downgrade -1; \
+	else \
+		$(PYTHON) -m alembic downgrade -1; \
+	fi
+
+migrate-current:
+	@if [ -x "$(ALEMBIC)" ]; then \
+		"$(ALEMBIC)" current; \
+	else \
+		$(PYTHON) -m alembic current; \
+	fi
+
+migrate-history:
+	@if [ -x "$(ALEMBIC)" ]; then \
+		"$(ALEMBIC)" history; \
+	else \
+		$(PYTHON) -m alembic history; \
+	fi
+
+migrate-heads:
+	@if [ -x "$(ALEMBIC)" ]; then \
+		"$(ALEMBIC)" heads; \
+	else \
+		$(PYTHON) -m alembic heads; \
+	fi
