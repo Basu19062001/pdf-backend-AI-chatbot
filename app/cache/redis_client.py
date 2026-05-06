@@ -22,7 +22,7 @@ def get_redis_client() -> Optional[Redis]:
 
     if _redis_client is None:
         _redis_client = Redis.from_url(
-            settings.REDIS_URL,
+            settings.redis_url,
             encoding="utf-8",
             decode_responses=True,
             socket_connect_timeout=settings.REDIS_CONNECT_TIMEOUT,

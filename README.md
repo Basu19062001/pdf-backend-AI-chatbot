@@ -500,7 +500,11 @@ Use `app/env/.env.example` as the base template.
 | `JWT_ISSUER` | Expected JWT issuer claim |
 | `JWT_AUDIENCE` | Expected JWT audience claim |
 | `REDIS_ENABLED` | Enables Redis-backed token storage with DB fallback |
-| `REDIS_URL` | Redis connection URL |
+| `REDIS_SCHEME` | `redis` or `rediss` |
+| `REDIS_HOST` | Redis host |
+| `REDIS_PORT` | Redis port |
+| `REDIS_PASSWORD` | Redis password if authentication is enabled |
+| `REDIS_DB` | Redis database index |
 | `REDIS_CONNECT_TIMEOUT` | Redis connection timeout in seconds |
 | `REDIS_TOKEN_KEY_PREFIX` | Redis key prefix for access-token sessions |
 

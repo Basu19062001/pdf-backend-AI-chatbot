@@ -56,7 +56,11 @@ class Settings(BaseSettings):
     JWT_AUDIENCE: str = "pdf-chatbot-clients"
 
     REDIS_ENABLED: bool = True
-    REDIS_URL: str = "redis://localhost:6379/0"
+    REDIS_SCHEME: str = "redis"
+    REDIS_HOST: str = "localhost"
+    REDIS_PORT: int = 6379
+    REDIS_PASSWORD: str = ""
+    REDIS_DB: int = 0
     REDIS_CONNECT_TIMEOUT: int = 5
     REDIS_TOKEN_KEY_PREFIX: str = "auth:access"
 
@@ -91,7 +95,9 @@ class Settings(BaseSettings):
         "JWT_ALGORITHM",
         "JWT_ISSUER",
         "JWT_AUDIENCE",
-        "REDIS_URL",
+        "REDIS_SCHEME",
+        "REDIS_HOST",
+        "REDIS_PASSWORD",
         "REDIS_TOKEN_KEY_PREFIX",
         mode="before",
     )
@@ -157,6 +163,14 @@ class Settings(BaseSettings):
             raise ValueError("JWT_ALGORITHM must be 'HS256'")
         if self.JWT_ACCESS_TOKEN_EXPIRE_MINUTES < 1:
             raise ValueError("JWT_ACCESS_TOKEN_EXPIRE_MINUTES must be greater than 0")
+        if self.REDIS_SCHEME not in {"redis", "rediss"}:
+            raise ValueError("REDIS_SCHEME must be 'redis' or 'rediss'")
+        if not self.REDIS_HOST.strip():
+            raise ValueError("REDIS_HOST must not be empty")
+        if self.REDIS_PORT < 1:
+            raise ValueError("REDIS_PORT must be greater than 0")
+        if self.REDIS_DB < 0:
+            raise ValueError("REDIS_DB must be greater than or equal to 0")
         if self.REDIS_CONNECT_TIMEOUT < 1:
             raise ValueError("REDIS_CONNECT_TIMEOUT must be greater than 0")
         if not self.REDIS_TOKEN_KEY_PREFIX.strip():
@@ -180,6 +194,20 @@ class Settings(BaseSettings):
         """
 
         return self.database_url
+
+    @property
+    def redis_url(self) -> str:
+        """
+        Redis URL composed from the individual Redis environment settings.
+
+        This mirrors the database configuration style so deployment environments
+        can provide Redis settings as discrete variables.
+        """
+
+        credentials = ""
+        if self.REDIS_PASSWORD:
+            credentials = f":{self.REDIS_PASSWORD}@"
+        return f"{self.REDIS_SCHEME}://{credentials}{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
 
 
 @lru_cache()
