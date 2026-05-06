@@ -143,6 +143,17 @@ class Settings(BaseSettings):
             scheme = "postgresql+asyncpg"
         return f"{scheme}://{self.DB_USERNAME}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
 
+    @property
+    def alembic_database_url(self) -> str:
+        """
+        Database URL consumed by Alembic.
+
+        Alembic in this project uses the same connection settings as the app
+        itself so there is a single source of truth for database configuration.
+        """
+
+        return self.database_url
+
 
 @lru_cache()
 def get_settings() -> Settings:
