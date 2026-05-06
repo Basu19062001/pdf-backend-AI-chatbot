@@ -6,3 +6,4 @@ from app.models.chat_message import ChatMessage
 from app.models.message_source import MessageSource
 from app.models.document_processing_log import DocumentProcessingLog
 from app.models.usage_log import UsageLog
+from app.models.user_auth_session import UserAuthSession

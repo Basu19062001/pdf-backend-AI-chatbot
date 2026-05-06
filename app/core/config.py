@@ -55,6 +55,11 @@ class Settings(BaseSettings):
     JWT_ISSUER: str = "pdf-chatbot-backend"
     JWT_AUDIENCE: str = "pdf-chatbot-clients"
 
+    REDIS_ENABLED: bool = True
+    REDIS_URL: str = "redis://localhost:6379/0"
+    REDIS_CONNECT_TIMEOUT: int = 5
+    REDIS_TOKEN_KEY_PREFIX: str = "auth:access"
+
     model_config = SettingsConfigDict(
         case_sensitive=False,
         extra="ignore",
@@ -86,6 +91,8 @@ class Settings(BaseSettings):
         "JWT_ALGORITHM",
         "JWT_ISSUER",
         "JWT_AUDIENCE",
+        "REDIS_URL",
+        "REDIS_TOKEN_KEY_PREFIX",
         mode="before",
     )
     @classmethod
@@ -94,7 +101,7 @@ class Settings(BaseSettings):
             return value.strip().strip('"').strip("'")
         return value
 
-    @field_validator("DEBUG", "DB_ECHO", "DB_POOL_PRE_PING", "DOCS_ENABLED", mode="before")
+    @field_validator("DEBUG", "DB_ECHO", "DB_POOL_PRE_PING", "DOCS_ENABLED", "REDIS_ENABLED", mode="before")
     @classmethod
     def parse_boolish(cls, value: object) -> object:
         if isinstance(value, bool):
@@ -150,6 +157,10 @@ class Settings(BaseSettings):
             raise ValueError("JWT_ALGORITHM must be 'HS256'")
         if self.JWT_ACCESS_TOKEN_EXPIRE_MINUTES < 1:
             raise ValueError("JWT_ACCESS_TOKEN_EXPIRE_MINUTES must be greater than 0")
+        if self.REDIS_CONNECT_TIMEOUT < 1:
+            raise ValueError("REDIS_CONNECT_TIMEOUT must be greater than 0")
+        if not self.REDIS_TOKEN_KEY_PREFIX.strip():
+            raise ValueError("REDIS_TOKEN_KEY_PREFIX must not be empty")
         return self
 
     @property

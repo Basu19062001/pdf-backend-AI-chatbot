@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
 
 from fastapi import HTTPException, status
 from sqlalchemy import Select, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import create_access_token, hash_password, verify_password
+from app.core.security import hash_password, verify_password
 from app.logger import get_logger
 from app.models.user import User
 from app.schemas.auth import (
@@ -18,6 +17,7 @@ from app.schemas.auth import (
     UserResponse,
     UserSignupRequest,
 )
+from app.services.auth_session_service import AuthSessionService, DeviceSessionContext
 
 logger = get_logger(__name__)
 
@@ -78,7 +78,11 @@ class AuthService:
         logger.info("User account created for '%s'.", normalized_email)
         return SignupResponse(user=UserResponse.model_validate(user))
 
-    async def login(self, payload: UserLoginRequest) -> AccessTokenResponse:
+    async def login(
+        self,
+        payload: UserLoginRequest,
+        device_context: DeviceSessionContext,
+    ) -> AccessTokenResponse:
         """Authenticate a user and issue a short-lived access token."""
         normalized_email = payload.email.lower()
         try:
@@ -100,19 +104,17 @@ class AuthService:
                     detail="User account is inactive",
                 )
 
-            token, expires_at = create_access_token(
-                subject=str(user.id),
-                additional_claims={"email": user.email, "role": user.role},
-            )
-            expires_in = max(
-                1,
-                int((expires_at - datetime.now(timezone.utc)).total_seconds()),
+            token, auth_session, expires_in = await AuthSessionService(self.session).issue_access_token(
+                user=user,
+                device_context=device_context,
             )
             logger.info("User '%s' authenticated successfully.", user.id)
             return AccessTokenResponse(
                 access_token=token,
                 expires_in=expires_in,
+                expires_at=auth_session.expires_at,
                 user=UserResponse.model_validate(user),
+                session=auth_session,
             )
         except HTTPException:
             raise

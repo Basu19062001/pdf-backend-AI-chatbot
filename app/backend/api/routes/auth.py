@@ -2,15 +2,24 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.backend.api.auth_dependencies import CurrentUser
+from app.backend.api.auth_dependencies import CurrentAuthContext
 from app.db import get_db_session
 from app.logger import get_logger
 from app.models.user import User
-from app.schemas.auth import AccessTokenResponse, SignupResponse, UserLoginRequest, UserResponse, UserSignupRequest
+from app.schemas.auth import (
+    AccessTokenResponse,
+    AuthSessionListResponse,
+    LogoutResponse,
+    SignupResponse,
+    UserLoginRequest,
+    UserResponse,
+    UserSignupRequest,
+)
 from app.services.auth_service import AuthService
+from app.services.auth_session_service import AuthSessionService, DeviceSessionContext
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -72,6 +81,7 @@ async def signup(
     ),
 )
 async def login(
+    request: Request,
     payload: UserLoginRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> AccessTokenResponse:
@@ -83,6 +93,7 @@ async def login(
     active, and returns a signed access token for authenticated API access.
 
     Args:
+        request: FastAPI request object used to capture device and network metadata.
         payload: Login request containing the user's email and password.
         session: Async database session injected by FastAPI.
 
@@ -95,7 +106,10 @@ async def login(
             inactive, or the authentication flow cannot be completed.
     """
     try:
-        response = await AuthService(session).login(payload)
+        response = await AuthService(session).login(
+            payload,
+            _build_device_context(request, payload),
+        )
         logger.info("Login endpoint completed for '%s'.", payload.email.lower())
         return response
     except HTTPException:
@@ -114,7 +128,7 @@ async def login(
     summary="Get the current authenticated user",
     description="Return the profile associated with the bearer token supplied in the request.",
 )
-async def get_me(current_user: CurrentUser) -> UserResponse:
+async def get_me(auth_context: CurrentAuthContext) -> UserResponse:
     """
     Return the currently authenticated user's profile.
 
@@ -124,7 +138,7 @@ async def get_me(current_user: CurrentUser) -> UserResponse:
     this handler is reached.
 
     Args:
-        current_user: The authenticated user resolved from the access token.
+        auth_context: The authenticated user and token-session context resolved from the access token.
 
     Returns:
         A safe user profile for the currently authenticated account.
@@ -134,7 +148,7 @@ async def get_me(current_user: CurrentUser) -> UserResponse:
             unexpected server-side error occurs.
     """
     try:
-        user: User = current_user
+        user: User = auth_context.user
         logger.info("Profile fetched for authenticated user '%s'.", user.id)
         return UserResponse.model_validate(user)
     except HTTPException:
@@ -145,3 +159,108 @@ async def get_me(current_user: CurrentUser) -> UserResponse:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Unable to load authenticated user profile at the moment",
         ) from exc
+
+
+@router.get(
+    "/sessions",
+    response_model=AuthSessionListResponse,
+    summary="List active authenticated sessions",
+    description=(
+        "Return the currently authenticated user's active device sessions. "
+        "Redis is used as the primary token store while the database remains the fallback source of truth."
+    ),
+)
+async def list_sessions(
+    auth_context: CurrentAuthContext,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> AuthSessionListResponse:
+    """
+    List active device sessions for the authenticated user.
+
+    This endpoint is useful for multi-device login management. Each returned
+    item represents a persisted authenticated session, including device
+    metadata, issuance time, and expiry time.
+
+    Args:
+        auth_context: Authenticated request context resolved from the bearer token.
+        session: Async database session injected by FastAPI.
+
+    Returns:
+        A list of active sessions currently associated with the authenticated user.
+
+    Raises:
+        HTTPException: Returned when sessions cannot be loaded due to auth or
+            server-side storage errors.
+    """
+    try:
+        sessions = await AuthSessionService(session).list_user_sessions(auth_context.user.id)
+        logger.info("Listed active auth sessions for user '%s'.", auth_context.user.id)
+        return AuthSessionListResponse(items=sessions)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Unhandled exception while listing auth sessions.")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to load active sessions at the moment",
+        ) from exc
+
+
+@router.post(
+    "/logout",
+    response_model=LogoutResponse,
+    summary="Delete the current authenticated session",
+    description=(
+        "Delete the currently authenticated access-token session from Redis and the database fallback store."
+    ),
+)
+async def logout(
+    auth_context: CurrentAuthContext,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> LogoutResponse:
+    """
+    Delete the current authenticated session.
+
+    This endpoint removes the active session from both Redis and the fallback
+    database table so the current bearer token can no longer be used.
+
+    Args:
+        auth_context: Authenticated request context resolved from the bearer token.
+        session: Async database session injected by FastAPI.
+
+    Returns:
+        A simple confirmation message after the active session has been removed.
+
+    Raises:
+        HTTPException: Returned when the session cannot be deleted or the
+            caller is not authenticated.
+    """
+    try:
+        await AuthSessionService(session).delete_session(
+            session_id=auth_context.session_id,
+            token_jti=auth_context.token_jti,
+        )
+        logger.info("Logged out auth session '%s' for user '%s'.", auth_context.session_id, auth_context.user.id)
+        return LogoutResponse()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Unhandled exception while logging out current auth session.")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to delete authenticated session at the moment",
+        ) from exc
+
+
+def _build_device_context(request: Request, payload: UserLoginRequest) -> DeviceSessionContext:
+    forwarded_for = request.headers.get("X-Forwarded-For", "")
+    forwarded_ip = forwarded_for.split(",")[0].strip() if forwarded_for else None
+    client_ip = forwarded_ip or (request.client.host if request.client else None)
+
+    return DeviceSessionContext(
+        device_id=payload.device_id or request.headers.get("X-Device-Id"),
+        device_name=payload.device_name or request.headers.get("X-Device-Name"),
+        device_type=payload.device_type or request.headers.get("X-Device-Type") or "unknown",
+        user_agent=request.headers.get("User-Agent"),
+        ip_address=client_ip,
+    )

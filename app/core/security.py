@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import os
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -59,15 +60,27 @@ def verify_password(password: str, password_hash: str) -> bool:
         return False
 
 
-def create_access_token(subject: str, additional_claims: dict[str, Any] | None = None) -> tuple[str, datetime]:
+def hash_token(token: str) -> str:
+    """Return a deterministic SHA-256 hash for a signed access token."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def create_access_token(
+    subject: str,
+    session_id: uuid.UUID,
+    token_jti: str,
+    additional_claims: dict[str, Any] | None = None,
+) -> tuple[str, datetime, datetime]:
     """Create a signed JWT access token with standard registered claims."""
-    expires_at = datetime.now(timezone.utc) + timedelta(
+    issued_at = datetime.now(timezone.utc)
+    expires_at = issued_at + timedelta(
         minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES
     )
-    issued_at = datetime.now(timezone.utc)
 
     payload: dict[str, Any] = {
         "sub": subject,
+        "sid": str(session_id),
+        "jti": token_jti,
         "iss": settings.JWT_ISSUER,
         "aud": settings.JWT_AUDIENCE,
         "iat": int(issued_at.timestamp()),
@@ -79,7 +92,7 @@ def create_access_token(subject: str, additional_claims: dict[str, Any] | None =
         payload.update(additional_claims)
 
     token = jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
-    return token, expires_at
+    return token, issued_at, expires_at
 
 
 def decode_access_token(token: str) -> dict[str, Any]:
@@ -99,7 +112,7 @@ def decode_access_token(token: str) -> dict[str, Any]:
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
 
-    if payload.get("type") != "access" or not payload.get("sub"):
+    if payload.get("type") != "access" or not payload.get("sub") or not payload.get("sid") or not payload.get("jti"):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate authentication credentials",

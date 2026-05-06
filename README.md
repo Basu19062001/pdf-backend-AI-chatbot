@@ -441,6 +441,8 @@ flowchart TD
 - `POST /api/v1/auth/signup`
 - `POST /api/v1/auth/login`
 - `GET /api/v1/auth/me`
+- `GET /api/v1/auth/sessions`
+- `POST /api/v1/auth/logout`
 
 ### Chats
 
@@ -497,6 +499,10 @@ Use `app/env/.env.example` as the base template.
 | `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | Access token lifetime in minutes |
 | `JWT_ISSUER` | Expected JWT issuer claim |
 | `JWT_AUDIENCE` | Expected JWT audience claim |
+| `REDIS_ENABLED` | Enables Redis-backed token storage with DB fallback |
+| `REDIS_URL` | Redis connection URL |
+| `REDIS_CONNECT_TIMEOUT` | Redis connection timeout in seconds |
+| `REDIS_TOKEN_KEY_PREFIX` | Redis key prefix for access-token sessions |
 
 ### Notes On Config Behavior
 
@@ -510,6 +516,7 @@ Use `app/env/.env.example` as the base template.
 
 - Python 3.12
 - PostgreSQL 14+ or compatible
+- Redis Stack or compatible Redis server
 - A database matching the values in `app/.env`
 
 ### Setup
@@ -521,7 +528,7 @@ pip install -r app/backend/requirements.txt
 cp app/env/.env.example app/.env
 ```
 
-Update `app/.env` to point at a live PostgreSQL instance before starting the app.
+Update `app/.env` to point at a live PostgreSQL instance and Redis instance before starting the app.
 
 ### Database Migration Setup
 

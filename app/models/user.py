@@ -43,3 +43,4 @@ class User(Base):
     documents = relationship("Document", back_populates="user", cascade=CASCADE_OPTION)
     chat_sessions = relationship("ChatSession", back_populates="user", cascade=CASCADE_OPTION)
     usage_logs = relationship("UsageLog", back_populates="user", cascade=CASCADE_OPTION)
+    auth_sessions = relationship("UserAuthSession", back_populates="user", cascade=CASCADE_OPTION)
