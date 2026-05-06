@@ -375,7 +375,7 @@ flowchart TD
     Embed[EmbeddingService]
     Upsert[PineconeService]
     SaveChunks[Persist document_chunks]
-    Ask[POST /api/v1/chats/sessions/{id}/messages]
+    Ask["POST /api/v1/chats/sessions/:session_id/messages"]
     Retrieve[Retrieve relevant chunks]
     Answer[LLMService]
     SaveMessage[Persist chat_messages]
