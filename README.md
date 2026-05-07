@@ -7,6 +7,7 @@ FastAPI backend for a PDF chat system with a production-oriented project structu
 This repository is best described as a production-shaped backend scaffold rather than a fully production-complete application.
 
 - The FastAPI app, configuration, logging, Docker setup, CI workflow, and SQLAlchemy models are in place.
+- End-user authentication is implemented with signup, login, bearer-token auth, Redis + PostgreSQL-backed session tracking, logout, session listing, and rotating refresh tokens.
 - The app requires a reachable PostgreSQL database at startup because `/api/v1/health` and the application lifespan both use a real database ping.
 - The `DocumentService` and `ChatService` routes currently use in-memory stores, not the SQLAlchemy models.
 - PDF parsing, chunking, embedding generation, Pinecone upserts, and LLM answering are still stub implementations in `app/services/`.
@@ -440,9 +441,19 @@ flowchart TD
 
 - `POST /api/v1/auth/signup`
 - `POST /api/v1/auth/login`
+- `POST /api/v1/auth/refresh`
 - `GET /api/v1/auth/me`
 - `GET /api/v1/auth/sessions`
 - `POST /api/v1/auth/logout`
+
+### Auth Token Lifecycle
+
+- `POST /api/v1/auth/login` returns a short-lived `access_token` and a longer-lived `refresh_token`.
+- Protected endpoints such as `GET /api/v1/auth/me` validate the access token first against Redis and then against the PostgreSQL fallback session store.
+- `POST /api/v1/auth/refresh` rotates the refresh token on every successful use and returns a brand-new access/refresh token pair for the same device session.
+- Refresh-token replay is treated as suspicious: if a stale rotated refresh token is reused for an existing session, that session is revoked.
+- Auth sessions are stored as one PostgreSQL row per user in `user_auth_sessions`, with each active device session represented as an entry inside the `active_sessions` JSONB array.
+- Redis is used as the hot cache for both access-token and refresh-token session metadata, namespaced under the app-level Redis key prefix.
 
 ### Chats
 
@@ -497,6 +508,7 @@ Use `app/env/.env.example` as the base template.
 | `JWT_SECRET_KEY` | Secret used to sign access tokens |
 | `JWT_ALGORITHM` | JWT signing algorithm, currently `HS256` |
 | `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | Access token lifetime in minutes |
+| `JWT_REFRESH_TOKEN_EXPIRE_DAYS` | Refresh token lifetime in days |
 | `JWT_ISSUER` | Expected JWT issuer claim |
 | `JWT_AUDIENCE` | Expected JWT audience claim |
 | `REDIS_ENABLED` | Enables Redis-backed token storage with DB fallback |
@@ -506,12 +518,13 @@ Use `app/env/.env.example` as the base template.
 | `REDIS_PASSWORD` | Redis password if authentication is enabled |
 | `REDIS_DB` | Redis database index |
 | `REDIS_CONNECT_TIMEOUT` | Redis connection timeout in seconds |
-| `REDIS_TOKEN_KEY_PREFIX` | Redis key prefix for access-token sessions |
+| `REDIS_KEY_PREFIX` | Base Redis key prefix for app-level cache namespaces |
 
 ### Notes On Config Behavior
 
 - `ALLOWED_ORIGINS` exists in settings but CORS middleware is not currently attached in `app/main.py`.
 - `DOCS_USERNAME` and `DOCS_PASSWORD` are accepted as legacy aliases and mapped to `DOC_ROOT_USERNAME` and `DOC_ROOT_PASSWORD`.
+- `REDIS_TOKEN_KEY_PREFIX` is accepted as a legacy alias and mapped to `REDIS_KEY_PREFIX`.
 - `DB_SCHEME=postgresql` is normalized internally to `postgresql+asyncpg`.
 
 ## Local Development
@@ -626,7 +639,7 @@ These are the highest-impact items still missing from the codebase itself:
 1. Replace the in-memory document and chat services with repository-backed database logic.
 2. Add migrations with Alembic and create the actual database schema from `app/models/`.
 3. Implement real PDF extraction, chunking, embeddings, vector search, and LLM orchestration.
-4. Add authentication and authorization for end users, not just docs protection.
+4. Add automated auth test coverage and auth-focused rate limiting for login and refresh flows.
 5. Add file upload handling and object storage strategy for PDFs.
 6. Add CORS middleware if a browser frontend will call this API.
 7. Add automated tests for services, routes, DB integration, and failure paths.
