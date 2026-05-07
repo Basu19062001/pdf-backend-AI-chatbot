@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     REDIS_PASSWORD: str = ""
     REDIS_DB: int = 0
     REDIS_CONNECT_TIMEOUT: int = 5
-    REDIS_TOKEN_KEY_PREFIX: str = "auth:access"
+    REDIS_KEY_PREFIX: str = "pdf-chatbot"
 
     model_config = SettingsConfigDict(
         case_sensitive=False,
@@ -98,7 +98,7 @@ class Settings(BaseSettings):
         "REDIS_SCHEME",
         "REDIS_HOST",
         "REDIS_PASSWORD",
-        "REDIS_TOKEN_KEY_PREFIX",
+        "REDIS_KEY_PREFIX",
         mode="before",
     )
     @classmethod
@@ -137,6 +137,8 @@ class Settings(BaseSettings):
             values["DOC_ROOT_USERNAME"] = values["DOCS_USERNAME"]
         if not values.get("DOC_ROOT_PASSWORD") and values.get("DOCS_PASSWORD"):
             values["DOC_ROOT_PASSWORD"] = values["DOCS_PASSWORD"]
+        if not values.get("REDIS_KEY_PREFIX") and values.get("REDIS_TOKEN_KEY_PREFIX"):
+            values["REDIS_KEY_PREFIX"] = values["REDIS_TOKEN_KEY_PREFIX"]
         return values
 
     @model_validator(mode="after")
@@ -173,8 +175,8 @@ class Settings(BaseSettings):
             raise ValueError("REDIS_DB must be greater than or equal to 0")
         if self.REDIS_CONNECT_TIMEOUT < 1:
             raise ValueError("REDIS_CONNECT_TIMEOUT must be greater than 0")
-        if not self.REDIS_TOKEN_KEY_PREFIX.strip():
-            raise ValueError("REDIS_TOKEN_KEY_PREFIX must not be empty")
+        if not self.REDIS_KEY_PREFIX.strip():
+            raise ValueError("REDIS_KEY_PREFIX must not be empty")
         return self
 
     @property
