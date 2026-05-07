@@ -1,19 +1,16 @@
 from __future__ import annotations
 
-import json
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException, status
-from redis.exceptions import RedisError
 from sqlalchemy import delete, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.cache import get_redis_client
-from app.core.config import settings
+from app.cache import RedisCacheService
 from app.core.security import create_access_token, hash_token
 from app.logger import get_logger
 from app.models.user import User
@@ -44,6 +41,7 @@ class AuthSessionService:
 
     def __init__(self, session: AsyncSession):
         self.session = session
+        self.cache = RedisCacheService(namespace="auth:access")
 
     async def issue_access_token(
         self,
@@ -74,10 +72,22 @@ class AuthSessionService:
         active_sessions = self._active_sessions(session_row.active_sessions)
         active_sessions.append(session_entry)
         session_row.active_sessions = active_sessions
+        logger.info(
+            "Prepared auth session '%s' for user '%s'. active_sessions_count=%s",
+            session_entry["session_id"],
+            user.id,
+            len(active_sessions),
+        )
 
         try:
             await self.session.commit()
             await self.session.refresh(session_row)
+            logger.info(
+                "Persisted auth sessions for user '%s' in '%s'. active_sessions_count=%s",
+                user.id,
+                AUTH_SESSION_TABLE_NAME,
+                len(self._active_sessions(session_row.active_sessions)),
+            )
         except SQLAlchemyError as exc:
             await self.session.rollback()
             if self._is_missing_auth_session_table(exc):
@@ -116,6 +126,7 @@ class AuthSessionService:
 
         cached_session = await self._get_cached_session(token_jti)
         if cached_session is not None:
+            logger.debug("Auth token cache hit for jti '%s'.", token_jti)
             if (
                 cached_session.get("token_hash") != token_digest
                 or cached_session.get("session_id") != str(session_id)
@@ -127,9 +138,10 @@ class AuthSessionService:
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Could not validate authentication credentials",
                     headers={"WWW-Authenticate": "Bearer"},
-                )
+            )
             return ValidatedAuthSession(user_id=user_id, session_id=session_id, token_jti=token_jti)
 
+        logger.debug("Auth token cache miss for jti '%s'. Falling back to DB session validation.", token_jti)
         session_row = await self._load_user_session_row(user_id)
         session_entry = self._find_session_entry(
             session_row.active_sessions if session_row else [],
@@ -299,11 +311,13 @@ class AuthSessionService:
     async def _get_or_create_user_session_row(self, user_id: uuid.UUID) -> UserAuthSession:
         session_row = await self._load_user_session_row(user_id)
         if session_row is not None:
+            logger.info("Loaded existing auth session row for user '%s'.", user_id)
             return session_row
 
         session_row = UserAuthSession(id=user_id, user_id=user_id, active_sessions=[])
         self.session.add(session_row)
         await self.session.flush()
+        logger.info("Created new auth session row for user '%s'.", user_id)
         return session_row
 
     async def _load_user_session_row(self, user_id: uuid.UUID) -> UserAuthSession | None:
@@ -380,54 +394,30 @@ class AuthSessionService:
         }
 
     async def _cache_session(self, user_id: uuid.UUID, session_entry: dict[str, Any], expires_in: int) -> None:
-        client = get_redis_client()
-        if client is None:
-            return
-
-        payload = json.dumps(
+        success = await self.cache.set_json(
             {
                 "session_id": session_entry["session_id"],
                 "user_id": str(user_id),
                 "token_jti": session_entry["token_jti"],
                 "token_hash": session_entry["token_hash"],
                 "expires_at": session_entry["expires_at"],
-            }
+            },
+            session_entry["token_jti"],
+            expires_in=max(1, expires_in),
         )
-        try:
-            await client.set(self._redis_key(session_entry["token_jti"]), payload, ex=max(1, expires_in))
-        except RedisError:
-            logger.exception("Failed to cache nested auth session '%s' in Redis.", session_entry["session_id"])
+        if not success:
+            logger.warning("Redis cache write skipped for nested auth session '%s'.", session_entry["session_id"])
 
     async def _get_cached_session(self, token_jti: str) -> dict[str, str] | None:
-        client = get_redis_client()
-        if client is None:
+        cached_session = await self.cache.get_json(token_jti)
+        if cached_session is None:
             return None
-
-        try:
-            payload = await client.get(self._redis_key(token_jti))
-        except RedisError:
-            logger.exception("Failed to read auth session '%s' from Redis.", token_jti)
-            return None
-
-        if not payload:
-            return None
-
-        try:
-            return json.loads(payload)
-        except json.JSONDecodeError:
-            logger.warning("Invalid Redis payload detected for auth session '%s'.", token_jti)
-            await self._delete_cached_session(token_jti)
-            return None
+        return {str(key): str(value) for key, value in cached_session.items()}
 
     async def _delete_cached_session(self, token_jti: str) -> None:
-        client = get_redis_client()
-        if client is None:
-            return
-
-        try:
-            await client.delete(self._redis_key(token_jti))
-        except RedisError:
-            logger.exception("Failed to delete cached auth session '%s'.", token_jti)
+        deleted = await self.cache.delete(token_jti)
+        if not deleted:
+            logger.warning("Redis cache delete skipped for auth session '%s'.", token_jti)
 
     def _find_session_entry(
         self,
@@ -475,9 +465,6 @@ class AuthSessionService:
 
     def _parse_dt(self, value: str) -> datetime:
         return datetime.fromisoformat(value)
-
-    def _redis_key(self, token_jti: str) -> str:
-        return f"{settings.REDIS_TOKEN_KEY_PREFIX}:{token_jti}"
 
     def _remaining_seconds(self, expires_at: datetime) -> int:
         return max(1, int((expires_at - datetime.now(timezone.utc)).total_seconds()))
