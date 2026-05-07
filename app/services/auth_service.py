@@ -112,7 +112,7 @@ class AuthService:
             return AccessTokenResponse(
                 access_token=token,
                 expires_in=expires_in,
-                expires_at=auth_session.expires_at,
+                expires_at=auth_session["expires_at"],
                 user=UserResponse.model_validate(user),
                 session=auth_session,
             )

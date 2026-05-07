@@ -50,7 +50,7 @@ class AuthSessionService:
         user: User,
         device_context: DeviceSessionContext,
     ) -> tuple[str, dict[str, Any], int]:
-        """Create a device-bound access token and append it to the user's session row."""
+        """Create a device-bound access token and return the public session payload."""
         await self.purge_expired_sessions()
 
         session_row = await self._get_or_create_user_session_row(user.id)
@@ -101,7 +101,7 @@ class AuthSessionService:
             user.id,
             session_entry["device_type"] or "unknown",
         )
-        return token, session_entry, expires_in
+        return token, self._public_session_view(session_entry), expires_in
 
     async def validate_access_token(
         self,
