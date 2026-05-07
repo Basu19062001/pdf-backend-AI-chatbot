@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str = "change-me-in-production-at-least-32chars"
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     JWT_ISSUER: str = "pdf-chatbot-backend"
     JWT_AUDIENCE: str = "pdf-chatbot-clients"
 
@@ -165,6 +166,8 @@ class Settings(BaseSettings):
             raise ValueError("JWT_ALGORITHM must be 'HS256'")
         if self.JWT_ACCESS_TOKEN_EXPIRE_MINUTES < 1:
             raise ValueError("JWT_ACCESS_TOKEN_EXPIRE_MINUTES must be greater than 0")
+        if self.JWT_REFRESH_TOKEN_EXPIRE_DAYS < 1:
+            raise ValueError("JWT_REFRESH_TOKEN_EXPIRE_DAYS must be greater than 0")
         if self.REDIS_SCHEME not in {"redis", "rediss"}:
             raise ValueError("REDIS_SCHEME must be 'redis' or 'rediss'")
         if not self.REDIS_HOST.strip():

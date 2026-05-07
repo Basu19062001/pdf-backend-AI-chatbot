@@ -13,6 +13,7 @@ from app.schemas.auth import (
     AccessTokenResponse,
     AuthSessionListResponse,
     LogoutResponse,
+    RefreshTokenRequest,
     SignupResponse,
     UserLoginRequest,
     UserResponse,
@@ -119,6 +120,51 @@ async def login(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Unable to process login at the moment",
+        ) from exc
+
+
+@router.post(
+    "/refresh",
+    response_model=AccessTokenResponse,
+    summary="Rotate a refresh token and issue a fresh token pair",
+    description=(
+        "Validate a refresh token, rotate the session's token pair, and return a new "
+        "access token and refresh token for continued authenticated use."
+    ),
+)
+async def refresh_token(
+    payload: RefreshTokenRequest,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> AccessTokenResponse:
+    """
+    Rotate a valid refresh token and issue a fresh access-token pair.
+
+    This endpoint is intended for session continuation after a short-lived
+    access token expires. Refresh-token reuse is prevented by rotating the
+    refresh token on every successful refresh request.
+
+    Args:
+        payload: Incoming refresh-token request payload.
+        session: Async database session injected by FastAPI.
+
+    Returns:
+        A fresh bearer token pair and the current device-session metadata.
+
+    Raises:
+        HTTPException: Returned when the refresh token is invalid, expired,
+            replayed, or the rotation flow cannot be completed.
+    """
+    try:
+        response = await AuthService(session).refresh(payload)
+        logger.info("Refresh endpoint completed successfully.")
+        return response
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Unhandled exception in refresh endpoint.")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to refresh authentication at the moment",
         ) from exc
 
 

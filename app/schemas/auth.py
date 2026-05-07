@@ -104,6 +104,21 @@ class UserResponse(BaseModel):
     updated_at: datetime
 
 
+class RefreshTokenRequest(BaseModel):
+    """Payload used to exchange a refresh token for a rotated token pair."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "example": {
+                "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+            }
+        },
+    )
+
+    refresh_token: SecretStr = Field(min_length=1, max_length=4096)
+
+
 class AuthSessionResponse(BaseModel):
     """Safe representation of a persisted authenticated device session."""
 
@@ -117,13 +132,14 @@ class AuthSessionResponse(BaseModel):
     ip_address: str | None
     issued_at: datetime
     expires_at: datetime
+    refresh_expires_at: datetime | None = None
     last_seen_at: datetime
     created_at: datetime
     updated_at: datetime
 
 
 class AccessTokenResponse(BaseModel):
-    """Bearer token response returned after successful authentication."""
+    """Bearer token pair response returned after successful authentication."""
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -132,6 +148,9 @@ class AccessTokenResponse(BaseModel):
                 "token_type": "bearer",
                 "expires_in": 3600,
                 "expires_at": "2026-05-06T13:00:00Z",
+                "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+                "refresh_token_expires_in": 604800,
+                "refresh_token_expires_at": "2026-05-13T12:00:00Z",
                 "user": {
                     "id": "6dfdf88e-3412-4701-885d-8b4c9c21db12",
                     "full_name": "Ava Sharma",
@@ -162,6 +181,9 @@ class AccessTokenResponse(BaseModel):
     token_type: str = "bearer"
     expires_in: int
     expires_at: datetime
+    refresh_token: str
+    refresh_token_expires_in: int
+    refresh_token_expires_at: datetime
     user: UserResponse
     session: AuthSessionResponse
 
