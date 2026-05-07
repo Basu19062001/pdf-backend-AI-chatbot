@@ -61,21 +61,21 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 
 def hash_token(token: str) -> str:
-    """Return a deterministic SHA-256 hash for a signed access token."""
+    """Return a deterministic SHA-256 hash for a signed token."""
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def create_access_token(
+def _create_signed_token(
     subject: str,
     session_id: uuid.UUID,
     token_jti: str,
+    token_type: str,
+    expires_delta: timedelta,
     additional_claims: dict[str, Any] | None = None,
 ) -> tuple[str, datetime, datetime]:
-    """Create a signed JWT access token with standard registered claims."""
+    """Create a signed JWT with standard registered claims."""
     issued_at = datetime.now(timezone.utc)
-    expires_at = issued_at + timedelta(
-        minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES
-    )
+    expires_at = issued_at + expires_delta
 
     payload: dict[str, Any] = {
         "sub": subject,
@@ -86,7 +86,7 @@ def create_access_token(
         "iat": int(issued_at.timestamp()),
         "nbf": int(issued_at.timestamp()),
         "exp": int(expires_at.timestamp()),
-        "type": "access",
+        "type": token_type,
     }
     if additional_claims:
         payload.update(additional_claims)
@@ -95,8 +95,40 @@ def create_access_token(
     return token, issued_at, expires_at
 
 
-def decode_access_token(token: str) -> dict[str, Any]:
-    """Decode and validate an access token."""
+def create_access_token(
+    subject: str,
+    session_id: uuid.UUID,
+    token_jti: str,
+    additional_claims: dict[str, Any] | None = None,
+) -> tuple[str, datetime, datetime]:
+    """Create a signed JWT access token with standard registered claims."""
+    return _create_signed_token(
+        subject=subject,
+        session_id=session_id,
+        token_jti=token_jti,
+        token_type="access",
+        expires_delta=timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES),
+        additional_claims=additional_claims,
+    )
+
+
+def create_refresh_token(
+    subject: str,
+    session_id: uuid.UUID,
+    token_jti: str,
+) -> tuple[str, datetime, datetime]:
+    """Create a signed JWT refresh token with standard registered claims."""
+    return _create_signed_token(
+        subject=subject,
+        session_id=session_id,
+        token_jti=token_jti,
+        token_type="refresh",
+        expires_delta=timedelta(days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS),
+    )
+
+
+def _decode_token(token: str, expected_type: str) -> dict[str, Any]:
+    """Decode and validate a signed JWT for the expected token type."""
     try:
         payload = jwt.decode(
             token,
@@ -112,7 +144,7 @@ def decode_access_token(token: str) -> dict[str, Any]:
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
 
-    if payload.get("type") != "access" or not payload.get("sub") or not payload.get("sid") or not payload.get("jti"):
+    if payload.get("type") != expected_type or not payload.get("sub") or not payload.get("sid") or not payload.get("jti"):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate authentication credentials",
@@ -120,3 +152,13 @@ def decode_access_token(token: str) -> dict[str, Any]:
         )
 
     return payload
+
+
+def decode_access_token(token: str) -> dict[str, Any]:
+    """Decode and validate an access token."""
+    return _decode_token(token, expected_type="access")
+
+
+def decode_refresh_token(token: str) -> dict[str, Any]:
+    """Decode and validate a refresh token."""
+    return _decode_token(token, expected_type="refresh")
