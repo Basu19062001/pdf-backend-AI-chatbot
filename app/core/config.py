@@ -56,6 +56,17 @@ class Settings(BaseSettings):
     JWT_ISSUER: str = "pdf-chatbot-backend"
     JWT_AUDIENCE: str = "pdf-chatbot-clients"
 
+    DOCUMENT_UPLOAD_DIR: str = "uploads"
+    DOCUMENT_MAX_FILE_SIZE_BYTES: int = 10 * 1024 * 1024
+    DOCUMENT_CHUNK_SIZE: int = 1200
+    DOCUMENT_CHUNK_OVERLAP: int = 200
+    PDF_ANALYSIS_MIN_WORDS_FOR_TEXT: int = 20
+    PDF_ANALYSIS_IMAGE_AREA_THRESHOLD: float = 0.35
+    PDF_ANALYSIS_OCR_IMAGE_AREA_THRESHOLD: float = 0.55
+    PDF_ANALYSIS_MIN_TABLE_ROWS: int = 2
+    PDF_ANALYSIS_MIN_TABLE_COLUMNS: int = 2
+    PDF_ANALYSIS_TABLE_DENSITY_THRESHOLD: float = 0.3
+
     REDIS_ENABLED: bool = True
     REDIS_SCHEME: str = "redis"
     REDIS_HOST: str = "localhost"
@@ -96,6 +107,7 @@ class Settings(BaseSettings):
         "JWT_ALGORITHM",
         "JWT_ISSUER",
         "JWT_AUDIENCE",
+        "DOCUMENT_UPLOAD_DIR",
         "REDIS_SCHEME",
         "REDIS_HOST",
         "REDIS_PASSWORD",
@@ -168,6 +180,32 @@ class Settings(BaseSettings):
             raise ValueError("JWT_ACCESS_TOKEN_EXPIRE_MINUTES must be greater than 0")
         if self.JWT_REFRESH_TOKEN_EXPIRE_DAYS < 1:
             raise ValueError("JWT_REFRESH_TOKEN_EXPIRE_DAYS must be greater than 0")
+        if not self.DOCUMENT_UPLOAD_DIR.strip():
+            raise ValueError("DOCUMENT_UPLOAD_DIR must not be empty")
+        if self.DOCUMENT_MAX_FILE_SIZE_BYTES < 1:
+            raise ValueError("DOCUMENT_MAX_FILE_SIZE_BYTES must be greater than 0")
+        if self.DOCUMENT_CHUNK_SIZE < 1:
+            raise ValueError("DOCUMENT_CHUNK_SIZE must be greater than 0")
+        if self.DOCUMENT_CHUNK_OVERLAP < 0:
+            raise ValueError("DOCUMENT_CHUNK_OVERLAP must be greater than or equal to 0")
+        if self.DOCUMENT_CHUNK_OVERLAP >= self.DOCUMENT_CHUNK_SIZE:
+            raise ValueError("DOCUMENT_CHUNK_OVERLAP must be smaller than DOCUMENT_CHUNK_SIZE")
+        if self.PDF_ANALYSIS_MIN_WORDS_FOR_TEXT < 0:
+            raise ValueError("PDF_ANALYSIS_MIN_WORDS_FOR_TEXT must be greater than or equal to 0")
+        if not 0 <= self.PDF_ANALYSIS_IMAGE_AREA_THRESHOLD <= 1:
+            raise ValueError("PDF_ANALYSIS_IMAGE_AREA_THRESHOLD must be between 0 and 1")
+        if not 0 <= self.PDF_ANALYSIS_OCR_IMAGE_AREA_THRESHOLD <= 1:
+            raise ValueError("PDF_ANALYSIS_OCR_IMAGE_AREA_THRESHOLD must be between 0 and 1")
+        if self.PDF_ANALYSIS_OCR_IMAGE_AREA_THRESHOLD < self.PDF_ANALYSIS_IMAGE_AREA_THRESHOLD:
+            raise ValueError(
+                "PDF_ANALYSIS_OCR_IMAGE_AREA_THRESHOLD must be greater than or equal to PDF_ANALYSIS_IMAGE_AREA_THRESHOLD"
+            )
+        if self.PDF_ANALYSIS_MIN_TABLE_ROWS < 1:
+            raise ValueError("PDF_ANALYSIS_MIN_TABLE_ROWS must be greater than 0")
+        if self.PDF_ANALYSIS_MIN_TABLE_COLUMNS < 1:
+            raise ValueError("PDF_ANALYSIS_MIN_TABLE_COLUMNS must be greater than 0")
+        if not 0 <= self.PDF_ANALYSIS_TABLE_DENSITY_THRESHOLD <= 1:
+            raise ValueError("PDF_ANALYSIS_TABLE_DENSITY_THRESHOLD must be between 0 and 1")
         if self.REDIS_SCHEME not in {"redis", "rediss"}:
             raise ValueError("REDIS_SCHEME must be 'redis' or 'rediss'")
         if not self.REDIS_HOST.strip():
