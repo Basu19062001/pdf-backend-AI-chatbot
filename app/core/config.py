@@ -60,6 +60,21 @@ class Settings(BaseSettings):
     DOCUMENT_MAX_FILE_SIZE_BYTES: int = 10 * 1024 * 1024
     DOCUMENT_CHUNK_SIZE: int = 1200
     DOCUMENT_CHUNK_OVERLAP: int = 200
+    OPENAI_API_KEY: str = ""
+    OPENAI_EMBEDDING_TIMEOUT_SECONDS: int = 30
+    EMBEDDING_MODEL: str = "text-embedding-3-small"
+    EMBEDDING_DIMENSION: int = 1536
+    EMBEDDING_BATCH_SIZE: int = 100
+    PINECONE_API_KEY: str = ""
+    PINECONE_INDEX_NAME: str = ""
+    PINECONE_INDEX_HOST: str = ""
+    PINECONE_CLOUD: str = "aws"
+    PINECONE_REGION: str = "us-east-1"
+    PINECONE_NAMESPACE: str = ""
+    PINECONE_METRIC: str = "cosine"
+    PINECONE_UPSERT_BATCH_SIZE: int = 100
+    PINECONE_INDEX_TIMEOUT_SECONDS: int = 60
+    PINECONE_CREATE_INDEX_IF_MISSING: bool = True
     PDF_ANALYSIS_MIN_WORDS_FOR_TEXT: int = 20
     PDF_ANALYSIS_IMAGE_AREA_THRESHOLD: float = 0.35
     PDF_ANALYSIS_OCR_IMAGE_AREA_THRESHOLD: float = 0.55
@@ -108,6 +123,15 @@ class Settings(BaseSettings):
         "JWT_ISSUER",
         "JWT_AUDIENCE",
         "DOCUMENT_UPLOAD_DIR",
+        "OPENAI_API_KEY",
+        "EMBEDDING_MODEL",
+        "PINECONE_API_KEY",
+        "PINECONE_INDEX_NAME",
+        "PINECONE_INDEX_HOST",
+        "PINECONE_CLOUD",
+        "PINECONE_REGION",
+        "PINECONE_NAMESPACE",
+        "PINECONE_METRIC",
         "REDIS_SCHEME",
         "REDIS_HOST",
         "REDIS_PASSWORD",
@@ -120,7 +144,15 @@ class Settings(BaseSettings):
             return value.strip().strip('"').strip("'")
         return value
 
-    @field_validator("DEBUG", "DB_ECHO", "DB_POOL_PRE_PING", "DOCS_ENABLED", "REDIS_ENABLED", mode="before")
+    @field_validator(
+        "DEBUG",
+        "DB_ECHO",
+        "DB_POOL_PRE_PING",
+        "DOCS_ENABLED",
+        "REDIS_ENABLED",
+        "PINECONE_CREATE_INDEX_IF_MISSING",
+        mode="before",
+    )
     @classmethod
     def parse_boolish(cls, value: object) -> object:
         if isinstance(value, bool):
@@ -190,6 +222,26 @@ class Settings(BaseSettings):
             raise ValueError("DOCUMENT_CHUNK_OVERLAP must be greater than or equal to 0")
         if self.DOCUMENT_CHUNK_OVERLAP >= self.DOCUMENT_CHUNK_SIZE:
             raise ValueError("DOCUMENT_CHUNK_OVERLAP must be smaller than DOCUMENT_CHUNK_SIZE")
+        if self.OPENAI_EMBEDDING_TIMEOUT_SECONDS < 1:
+            raise ValueError("OPENAI_EMBEDDING_TIMEOUT_SECONDS must be greater than 0")
+        if not self.EMBEDDING_MODEL.strip():
+            raise ValueError("EMBEDDING_MODEL must not be empty")
+        if self.EMBEDDING_DIMENSION < 1:
+            raise ValueError("EMBEDDING_DIMENSION must be greater than 0")
+        if self.EMBEDDING_BATCH_SIZE < 1:
+            raise ValueError("EMBEDDING_BATCH_SIZE must be greater than 0")
+        if self.PINECONE_INDEX_NAME and not self.PINECONE_INDEX_NAME.replace("-", "").replace("_", "").isalnum():
+            raise ValueError("PINECONE_INDEX_NAME may contain only letters, numbers, hyphens, and underscores")
+        if self.PINECONE_CLOUD not in {"aws", "gcp", "azure"}:
+            raise ValueError("PINECONE_CLOUD must be one of: aws, gcp, azure")
+        if not self.PINECONE_REGION.strip():
+            raise ValueError("PINECONE_REGION must not be empty")
+        if self.PINECONE_METRIC not in {"cosine", "dotproduct", "euclidean"}:
+            raise ValueError("PINECONE_METRIC must be one of: cosine, dotproduct, euclidean")
+        if self.PINECONE_UPSERT_BATCH_SIZE < 1:
+            raise ValueError("PINECONE_UPSERT_BATCH_SIZE must be greater than 0")
+        if self.PINECONE_INDEX_TIMEOUT_SECONDS < 1:
+            raise ValueError("PINECONE_INDEX_TIMEOUT_SECONDS must be greater than 0")
         if self.PDF_ANALYSIS_MIN_WORDS_FOR_TEXT < 0:
             raise ValueError("PDF_ANALYSIS_MIN_WORDS_FOR_TEXT must be greater than or equal to 0")
         if not 0 <= self.PDF_ANALYSIS_IMAGE_AREA_THRESHOLD <= 1:

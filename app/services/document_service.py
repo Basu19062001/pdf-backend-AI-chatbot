@@ -14,11 +14,14 @@ from app.models.document import Document
 from app.models.document_chunk import DocumentChunk
 from app.models.document_processing_log import DocumentProcessingLog
 from app.models.user import User
+from app.core.config import settings
 from app.schemas.document import DocumentResponse, DocumentUploadResponse
 from app.services.chunk_service import ChunkService
 from app.services.document_storage_service import DocumentStorageService, StoredDocumentFile
 from app.services.document_validation_service import DocumentValidationService
+from app.services.embedding_service import EmbeddingService
 from app.services.pdf_service import PDFService
+from app.services.pinecone_service import PineconeService, VectorRecord
 
 logger = get_logger(__name__)
 
@@ -32,6 +35,8 @@ class DocumentService:
         self.storage_service = DocumentStorageService()
         self.pdf_service = PDFService()
         self.chunk_service = ChunkService()
+        self.embedding_service = EmbeddingService()
+        self.pinecone_service = PineconeService()
 
     async def list_documents(self, user_id: uuid.UUID) -> list[DocumentResponse]:
         try:
@@ -88,6 +93,7 @@ class DocumentService:
         )
         stored_file: StoredDocumentFile | None = None
         document: Document | None = None
+        vector_ids_upserted: list[str] = []
 
         try:
             logger.info(
@@ -175,15 +181,18 @@ class DocumentService:
                 completed_at=datetime.now(timezone.utc),
             )
 
-            persistence_started_at = datetime.now(timezone.utc)
+            embedding_started_at = datetime.now(timezone.utc)
             logger.info(
-                "Persisting chunks for document '%s'. chunk_count=%s",
+                "Starting embedding generation for document '%s'. chunk_count=%s model='%s'",
                 document.id,
                 len(chunks),
+                settings.EMBEDDING_MODEL,
             )
+            chunk_records: list[DocumentChunk] = []
             for chunk in chunks:
-                self.session.add(
+                chunk_records.append(
                     DocumentChunk(
+                        id=uuid.uuid4(),
                         document_id=document.id,
                         pinecone_vector_id=f"{document.id}:{chunk.chunk_index}",
                         chunk_index=chunk.chunk_index,
@@ -191,9 +200,85 @@ class DocumentService:
                         page_number_end=chunk.page_number_end,
                         chunk_text=chunk.chunk_text,
                         token_count=chunk.token_count,
-                        embedding_model=None,
+                        embedding_model=settings.EMBEDDING_MODEL,
                     )
                 )
+
+            embeddings = await self.embedding_service.create_embeddings(
+                [chunk_record.chunk_text for chunk_record in chunk_records],
+                user_reference=str(user.id),
+            )
+            logger.info(
+                "Embedding generation completed for document '%s'. embeddings=%s dimension=%s",
+                document.id,
+                len(embeddings),
+                settings.EMBEDDING_DIMENSION,
+            )
+            await self._create_processing_log(
+                document_id=document.id,
+                step_name="embedding",
+                status_value="completed",
+                message=(
+                    f"Generated {len(embeddings)} embeddings using "
+                    f"{settings.EMBEDDING_MODEL}."
+                ),
+                started_at=embedding_started_at,
+                completed_at=datetime.now(timezone.utc),
+            )
+
+            vector_started_at = datetime.now(timezone.utc)
+            logger.info(
+                "Starting Pinecone upsert for document '%s'. vector_count=%s index='%s'",
+                document.id,
+                len(chunk_records),
+                settings.PINECONE_INDEX_NAME,
+            )
+            vector_records = [
+                VectorRecord(
+                    vector_id=chunk_record.pinecone_vector_id,
+                    values=embedding,
+                    metadata={
+                        "document_id": str(document.id),
+                        "user_id": str(user.id),
+                        "chunk_id": str(chunk_record.id),
+                        "chunk_index": chunk_record.chunk_index,
+                        "page_number_start": chunk_record.page_number_start or 0,
+                        "page_number_end": chunk_record.page_number_end or 0,
+                        "token_count": chunk_record.token_count or 0,
+                        "embedding_model": chunk_record.embedding_model or settings.EMBEDDING_MODEL,
+                        "file_type": "pdf",
+                    },
+                )
+                for chunk_record, embedding in zip(chunk_records, embeddings, strict=True)
+            ]
+            await self.pinecone_service.upsert_vectors(vector_records)
+            vector_ids_upserted = [record.vector_id for record in vector_records]
+            logger.info(
+                "Pinecone upsert completed for document '%s'. vector_count=%s index='%s'",
+                document.id,
+                len(vector_ids_upserted),
+                settings.PINECONE_INDEX_NAME,
+            )
+            await self._create_processing_log(
+                document_id=document.id,
+                step_name="vector_index",
+                status_value="completed",
+                message=(
+                    f"Upserted {len(vector_ids_upserted)} vectors to Pinecone index "
+                    f"'{settings.PINECONE_INDEX_NAME}'."
+                ),
+                started_at=vector_started_at,
+                completed_at=datetime.now(timezone.utc),
+            )
+
+            persistence_started_at = datetime.now(timezone.utc)
+            logger.info(
+                "Persisting chunks for document '%s'. chunk_count=%s",
+                document.id,
+                len(chunk_records),
+            )
+            for chunk_record in chunk_records:
+                self.session.add(chunk_record)
 
             document.total_pages = len(validated_pages)
             document.status = "processed"
@@ -231,6 +316,8 @@ class DocumentService:
                 exc.detail,
             )
             await self.session.rollback()
+            if vector_ids_upserted:
+                await self.pinecone_service.delete_vectors(vector_ids_upserted)
             if document is not None:
                 await self._mark_document_failed(document.id, str(exc.detail))
             elif stored_file is not None:
@@ -244,6 +331,8 @@ class DocumentService:
         except SQLAlchemyError as exc:
             await self.session.rollback()
             logger.exception("Database error while uploading a PDF for user '%s'.", user.id)
+            if vector_ids_upserted:
+                await self.pinecone_service.delete_vectors(vector_ids_upserted)
             if document is not None:
                 await self._mark_document_failed(document.id, "Failed to persist uploaded PDF metadata")
             elif stored_file is not None:
@@ -260,6 +349,8 @@ class DocumentService:
         except Exception as exc:
             await self.session.rollback()
             logger.exception("Unexpected error while uploading a PDF for user '%s'.", user.id)
+            if vector_ids_upserted:
+                await self.pinecone_service.delete_vectors(vector_ids_upserted)
             if document is not None:
                 await self._mark_document_failed(document.id, "Unexpected error while processing uploaded PDF")
             elif stored_file is not None:
