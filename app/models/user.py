@@ -1,11 +1,12 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
 from sqlalchemy import Boolean, CheckConstraint, DateTime, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+from app.utils import utc_now
 
 
 class User(Base):
@@ -23,8 +24,6 @@ class User(Base):
     )
 
     CASCADE_OPTION = "all, delete-orphan"
-    default_timezone = lambda: datetime.now(timezone.utc)
-
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     full_name: Mapped[str] = mapped_column(String(150), nullable=False)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
@@ -32,11 +31,11 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(30), default="user", nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=default_timezone, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=default_timezone,
-        onupdate=default_timezone,
+        default=utc_now,
+        onupdate=utc_now,
         nullable=False,
     )
 

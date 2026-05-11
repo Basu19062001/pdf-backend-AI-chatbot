@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text, CheckConstraint
@@ -7,6 +7,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+from app.utils import utc_now
 
 
 class ChatMessage(Base):
@@ -40,8 +41,6 @@ class ChatMessage(Base):
     )
 
     CASCADE_OPTION = "all, delete-orphan"
-    default_timezone = lambda: datetime.now(timezone.utc)
-
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
     chat_session_id: Mapped[uuid.UUID] = mapped_column(
@@ -60,7 +59,7 @@ class ChatMessage(Base):
     total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     estimated_cost: Mapped[Decimal | None] = mapped_column(Numeric(12, 6), nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=default_timezone, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
     session = relationship("ChatSession", back_populates="messages")
     sources = relationship("MessageSource", back_populates="message", cascade="all, delete-orphan")

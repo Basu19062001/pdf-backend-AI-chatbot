@@ -1,11 +1,12 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
 from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+from app.utils import utc_now
 
 
 class Document(Base):
@@ -35,8 +36,6 @@ class Document(Base):
     )
 
     CASCADE_OPTION = "all, delete-orphan"
-    default_timezone = lambda: datetime.now(timezone.utc)
-
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         primary_key=True,
@@ -65,16 +64,16 @@ class Document(Base):
 
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=default_timezone, nullable=False,)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False,)
 
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=default_timezone, nullable=False,)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False,)
 
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=default_timezone,
-        onupdate=default_timezone,
+        default=utc_now,
+        onupdate=utc_now,
         nullable=False,
     )
 

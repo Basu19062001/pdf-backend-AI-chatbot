@@ -1,11 +1,12 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+from app.utils import utc_now
 
 
 class DocumentChunk(Base):
@@ -44,8 +45,6 @@ class DocumentChunk(Base):
     )
 
     CASCADE_OPTION = "all, delete-orphan"
-    default_timezone = lambda: datetime.now(timezone.utc)
-
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,)
 
     document_id: Mapped[uuid.UUID] = mapped_column(
@@ -63,7 +62,7 @@ class DocumentChunk(Base):
     token_count: Mapped[int | None] = mapped_column(Integer, nullable=True,)
     embedding_model: Mapped[str | None] = mapped_column(String(100), nullable=True,)
     
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=default_timezone, nullable=False,)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False,)
 
     document = relationship("Document", back_populates="chunks",)
     message_sources = relationship("MessageSource", back_populates="chunk", cascade=CASCADE_OPTION,)
