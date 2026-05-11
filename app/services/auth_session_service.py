@@ -15,6 +15,7 @@ from app.core.security import create_access_token, create_refresh_token, hash_to
 from app.logger import get_logger
 from app.models.user import User
 from app.models.user_auth_session import UserAuthSession
+from app.utils import utc_now
 
 logger = get_logger(__name__)
 AUTH_SESSION_TABLE_NAME = "user_auth_sessions"
@@ -146,7 +147,7 @@ class AuthSessionService:
             )
 
         expires_at = self._parse_dt(session_entry["expires_at"])
-        if expires_at <= datetime.now(timezone.utc):
+        if expires_at <= utc_now():
             logger.info("Expired nested auth session '%s' encountered during validation.", session_id)
             await self._delete_cached_session(token_jti)
             raise HTTPException(
@@ -169,7 +170,7 @@ class AuthSessionService:
         session_id = uuid.UUID(payload["sid"])
         user_id = uuid.UUID(payload["sub"])
         refresh_token_digest = hash_token(refresh_token)
-        now = datetime.now(timezone.utc)
+        now = utc_now()
 
         cached_refresh = await self._get_cached_refresh_session(refresh_token_jti)
         if cached_refresh is not None and (
@@ -305,7 +306,7 @@ class AuthSessionService:
 
     async def touch_session(self, session_id: uuid.UUID) -> None:
         """Update the nested last-seen timestamp for a specific device session."""
-        now = datetime.now(timezone.utc)
+        now = utc_now()
         try:
             session_row = await self._load_session_row_by_nested_session_id(session_id)
             if session_row is None:
@@ -393,7 +394,7 @@ class AuthSessionService:
 
     async def purge_expired_sessions(self) -> int:
         """Remove expired nested sessions from aggregated user rows and delete empty rows."""
-        now = datetime.now(timezone.utc)
+        now = utc_now()
         deleted_sessions = 0
         try:
             result = await self.session.scalars(select(UserAuthSession))
@@ -730,7 +731,7 @@ class AuthSessionService:
         return datetime.fromisoformat(value)
 
     def _remaining_seconds(self, expires_at: datetime) -> int:
-        return max(1, int((expires_at - datetime.now(timezone.utc)).total_seconds()))
+        return max(1, int((expires_at - utc_now()).total_seconds()))
 
     def _is_missing_auth_session_table(self, exc: SQLAlchemyError) -> bool:
         if not isinstance(exc, ProgrammingError):

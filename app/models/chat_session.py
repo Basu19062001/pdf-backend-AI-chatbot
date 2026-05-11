@@ -1,11 +1,12 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, String, CheckConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+from app.utils import utc_now
 
 
 class ChatSession(Base):
@@ -19,8 +20,6 @@ class ChatSession(Base):
     )
 
     CASCADE_OPTION = "all, delete-orphan"
-    default_timezone = lambda: datetime.now(timezone.utc)
-
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
     user_id: Mapped[uuid.UUID] = mapped_column(
@@ -40,10 +39,10 @@ class ChatSession(Base):
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="active", nullable=False)
 
-    started_at: Mapped[datetime] = mapped_column(DateTime, default=default_timezone, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=default_timezone, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=default_timezone, onupdate=default_timezone, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
 
     user = relationship("User", back_populates="chat_sessions")
     document = relationship("Document", back_populates="chat_sessions")

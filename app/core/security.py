@@ -5,13 +5,14 @@ import hashlib
 import hmac
 import os
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any
 
 import jwt
 from fastapi import HTTPException, status
 
 from app.core.config import settings
+from app.utils import utc_now
 
 SCRYPT_N = 2**14
 SCRYPT_R = 8
@@ -74,7 +75,7 @@ def _create_signed_token(
     additional_claims: dict[str, Any] | None = None,
 ) -> tuple[str, datetime, datetime]:
     """Create a signed JWT with standard registered claims."""
-    issued_at = datetime.now(timezone.utc)
+    issued_at = utc_now()
     expires_at = issued_at + expires_delta
 
     payload: dict[str, Any] = {

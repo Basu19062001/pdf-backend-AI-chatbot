@@ -1,11 +1,12 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, Text, CheckConstraint, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+from app.utils import utc_now
 
 
 class MessageSource(Base):
@@ -39,8 +40,6 @@ class MessageSource(Base):
         ),
     )
 
-    default_timezone = lambda: datetime.now(timezone.utc)
-
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
     message_id: Mapped[uuid.UUID] = mapped_column(
@@ -63,7 +62,7 @@ class MessageSource(Base):
     page_number_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
     quoted_text: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=default_timezone, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
     message = relationship("ChatMessage", back_populates="sources")
     chunk = relationship("DocumentChunk", back_populates="message_sources")

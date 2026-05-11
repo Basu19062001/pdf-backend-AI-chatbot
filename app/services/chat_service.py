@@ -1,11 +1,10 @@
-from datetime import datetime, timezone
-
 from app.schemas.chat import (
     ChatMessageCreate,
     ChatMessageResponse,
     ChatSessionCreate,
     ChatSessionResponse,
 )
+from app.utils import utc_now
 from app.utils.id_generator import generate_entity_id
 
 _SESSION_STORE: dict[str, ChatSessionResponse] = {}
@@ -16,7 +15,7 @@ class ChatService:
         return sorted(_SESSION_STORE.values(), key=lambda item: item.created_at, reverse=True)
 
     def create_session(self, payload: ChatSessionCreate) -> ChatSessionResponse:
-        now = datetime.now(timezone.utc)
+        now = utc_now()
         session = ChatSessionResponse(
             id=generate_entity_id("ses"),
             status="active",
@@ -36,7 +35,7 @@ class ChatService:
         if not session:
             return None
 
-        now = datetime.now(timezone.utc)
+        now = utc_now()
         message = ChatMessageResponse(
             id=generate_entity_id("msg"),
             created_at=now,

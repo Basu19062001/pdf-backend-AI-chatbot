@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 import uuid
 
@@ -22,6 +22,7 @@ from app.services.document_validation_service import DocumentValidationService
 from app.services.embedding_service import EmbeddingService
 from app.services.pdf_service import PDFService
 from app.services.pinecone_service import PineconeService, VectorRecord
+from app.utils import utc_now
 
 logger = get_logger(__name__)
 
@@ -129,7 +130,7 @@ class DocumentService:
                 document.status,
             )
 
-            extraction_started_at = datetime.now(timezone.utc)
+            extraction_started_at = utc_now()
             logger.info(
                 "Starting PDF extraction for document '%s'. absolute_path='%s'",
                 document.id,
@@ -152,10 +153,10 @@ class DocumentService:
                     f"{extraction_result.summary}."
                 ),
                 started_at=extraction_started_at,
-                completed_at=datetime.now(timezone.utc),
+                completed_at=utc_now(),
             )
 
-            chunking_started_at = datetime.now(timezone.utc)
+            chunking_started_at = utc_now()
             logger.info(
                 "Starting chunk generation for document '%s'. page_count=%s'",
                 document.id,
@@ -178,10 +179,10 @@ class DocumentService:
                 status_value="completed",
                 message=f"Prepared {len(chunks)} chunks from extracted PDF text.",
                 started_at=chunking_started_at,
-                completed_at=datetime.now(timezone.utc),
+                completed_at=utc_now(),
             )
 
-            embedding_started_at = datetime.now(timezone.utc)
+            embedding_started_at = utc_now()
             logger.info(
                 "Starting embedding generation for document '%s'. chunk_count=%s model='%s'",
                 document.id,
@@ -223,10 +224,10 @@ class DocumentService:
                     f"{settings.EMBEDDING_MODEL}."
                 ),
                 started_at=embedding_started_at,
-                completed_at=datetime.now(timezone.utc),
+                completed_at=utc_now(),
             )
 
-            vector_started_at = datetime.now(timezone.utc)
+            vector_started_at = utc_now()
             logger.info(
                 "Starting Pinecone upsert for document '%s'. vector_count=%s index='%s'",
                 document.id,
@@ -268,10 +269,10 @@ class DocumentService:
                     f"'{settings.PINECONE_INDEX_NAME}'."
                 ),
                 started_at=vector_started_at,
-                completed_at=datetime.now(timezone.utc),
+                completed_at=utc_now(),
             )
 
-            persistence_started_at = datetime.now(timezone.utc)
+            persistence_started_at = utc_now()
             logger.info(
                 "Persisting chunks for document '%s'. chunk_count=%s",
                 document.id,
@@ -282,7 +283,7 @@ class DocumentService:
 
             document.total_pages = len(validated_pages)
             document.status = "processed"
-            document.processed_at = datetime.now(timezone.utc)
+            document.processed_at = utc_now()
             document.error_message = None
             logger.info(
                 "Updating processed document metadata for document '%s'. total_pages=%s status='%s'",
@@ -296,7 +297,7 @@ class DocumentService:
                 status_value="completed",
                 message=f"Saved {len(chunks)} chunks for processed PDF.",
                 started_at=persistence_started_at,
-                completed_at=datetime.now(timezone.utc),
+                completed_at=utc_now(),
             )
             logger.info("Committing processed upload transaction for document '%s'.", document.id)
             await self.session.commit()
@@ -388,7 +389,7 @@ class DocumentService:
             file_type="pdf",
             file_size_bytes=file_size_bytes,
             status="processing",
-            uploaded_at=datetime.now(timezone.utc),
+            uploaded_at=utc_now(),
             error_message=None,
         )
         self.session.add(document)
@@ -414,7 +415,7 @@ class DocumentService:
             status_value="completed",
             message=f"Stored uploaded PDF at '{stored_file.relative_path}'.",
             started_at=document.uploaded_at,
-            completed_at=datetime.now(timezone.utc),
+            completed_at=utc_now(),
         )
         logger.info("Committed initial processing logs for document '%s'.", document.id)
         await self.session.commit()
@@ -454,8 +455,8 @@ class DocumentService:
                 step_name="processing",
                 status_value="failed",
                 message=message,
-                started_at=datetime.now(timezone.utc),
-                completed_at=datetime.now(timezone.utc),
+                started_at=utc_now(),
+                completed_at=utc_now(),
             )
             await self.session.commit()
             logger.warning("Marked document '%s' as failed. reason='%s'", document_id, message)

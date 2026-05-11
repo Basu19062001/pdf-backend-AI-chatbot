@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, CheckConstraint
@@ -7,6 +7,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+from app.utils import utc_now
 
 
 class UsageLog(Base):
@@ -34,8 +35,6 @@ class UsageLog(Base):
             name="usage_log_cost_check",
         ),
     )
-
-    default_timezone = lambda: datetime.now(timezone.utc)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
@@ -69,7 +68,7 @@ class UsageLog(Base):
     total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cost: Mapped[Decimal | None] = mapped_column(Numeric(12, 6), nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=default_timezone, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
     user = relationship("User", back_populates="usage_logs")
     document = relationship("Document", back_populates="usage_logs")

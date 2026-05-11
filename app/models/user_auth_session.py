@@ -1,11 +1,12 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+from app.utils import utc_now
 
 
 class UserAuthSession(Base):
@@ -17,8 +18,6 @@ class UserAuthSession(Base):
             name="active_sessions_array_check",
         ),
     )
-
-    default_timezone = lambda: datetime.now(timezone.utc)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
@@ -37,13 +36,13 @@ class UserAuthSession(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=default_timezone,
+        default=utc_now,
         nullable=False,
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=default_timezone,
-        onupdate=default_timezone,
+        default=utc_now,
+        onupdate=utc_now,
         nullable=False,
     )
 
