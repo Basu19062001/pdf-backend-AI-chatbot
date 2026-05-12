@@ -8,10 +8,12 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from app.backend.api.router import api_router
+from app.cache import close_redis, initialize_redis
 from app.core.config import settings
-from app.db import close_database, initialize_database
+from app.db import close_database, get_session_factory, initialize_database
 from app.logger import get_logger, setup_logging
 from app.middleware.request_logging import RequestLoggingMiddleware
+from app.services.auth_session_service import AuthSessionService
 
 security = HTTPBasic()
 setup_logging()
@@ -38,9 +40,14 @@ def verify_docs_access(
 async def lifespan(_: FastAPI):
     logger.info("Initializing application resources.")
     await initialize_database()
+    await initialize_redis()
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        await AuthSessionService(session).purge_expired_sessions()
     try:
         yield
     finally:
+        await close_redis()
         await close_database()
         logger.info("Application resources shut down cleanly.")
 
