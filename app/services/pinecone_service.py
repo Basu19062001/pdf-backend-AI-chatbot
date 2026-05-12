@@ -23,6 +23,13 @@ class VectorRecord:
     metadata: dict[str, str | int | float | bool | list[str] | list[int] | list[float]]
 
 
+@dataclass(slots=True)
+class QueryMatch:
+    vector_id: str
+    score: float
+    metadata: dict[str, str | int | float | bool | list[str] | list[int] | list[float]]
+
+
 class PineconeService:
     """Manage Pinecone index lifecycle and vector operations."""
 
@@ -160,6 +167,58 @@ class PineconeService:
         if not vector_ids:
             return
         await asyncio.to_thread(self._delete_vectors_sync, list(vector_ids))
+
+    async def query_similar(
+        self,
+        vector: Sequence[float],
+        top_k: int,
+        metadata_filter: dict[str, object] | None = None,
+    ) -> list[QueryMatch]:
+        if not vector:
+            return []
+        return await asyncio.to_thread(
+            self._query_similar_sync,
+            list(vector),
+            top_k,
+            metadata_filter,
+        )
+
+    def _query_similar_sync(
+        self,
+        vector: list[float],
+        top_k: int,
+        metadata_filter: dict[str, object] | None,
+    ) -> list[QueryMatch]:
+        try:
+            index = self._get_index()
+            logger.info(
+                "Querying Pinecone for similar chunks. top_k=%s index='%s' namespace='%s'",
+                top_k,
+                settings.PINECONE_INDEX_NAME,
+                self._namespace() or "<default>",
+            )
+            response = index.query(
+                vector=vector,
+                top_k=top_k,
+                namespace=self._namespace(),
+                include_metadata=True,
+                filter=metadata_filter,
+            )
+            matches = getattr(response, "matches", None) or []
+            return [
+                QueryMatch(
+                    vector_id=match.id,
+                    score=float(match.score or 0.0),
+                    metadata=dict(match.metadata or {}),
+                )
+                for match in matches
+            ]
+        except PineconeException as exc:
+            logger.exception("Pinecone similarity search failed for index '%s'.", settings.PINECONE_INDEX_NAME)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Unable to retrieve similar document chunks from Pinecone",
+            ) from exc
 
     def _delete_vectors_sync(self, vector_ids: list[str]) -> None:
         try:
