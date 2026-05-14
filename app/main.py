@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 import secrets
 
 from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -64,6 +65,13 @@ def create_application() -> FastAPI:
         lifespan=lifespan,
     )
     app.include_router(api_router, prefix=settings.API_V1_STR)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.ALLOWED_ORIGINS,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     app.add_middleware(RequestLoggingMiddleware)
 
     @app.get("/health", include_in_schema=False)
