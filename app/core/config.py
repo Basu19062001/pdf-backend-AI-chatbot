@@ -62,9 +62,37 @@ class Settings(BaseSettings):
     DOCUMENT_CHUNK_OVERLAP: int = 200
     OPENAI_API_KEY: str = ""
     OPENAI_EMBEDDING_TIMEOUT_SECONDS: int = 30
+    OPENAI_CHAT_TIMEOUT_SECONDS: int = 60
     EMBEDDING_MODEL: str = "text-embedding-3-small"
     EMBEDDING_DIMENSION: int = 1536
     EMBEDDING_BATCH_SIZE: int = 100
+    CHAT_MODEL: str = "gpt-4.1-mini"
+    CHAT_MAX_CONTEXT_CHUNKS: int = 6
+    CHAT_MAX_HISTORY_MESSAGES: int = 10
+    CHAT_MAX_OUTPUT_TOKENS: int = 900
+    CHAT_TEMPERATURE: float = 0.2
+    CHAT_SYSTEM_PROMPT: str = (
+        "You are a production-grade retrieval-augmented assistant for answering questions about uploaded PDFs. "
+        "Your job is to help the user using only the retrieved document evidence and the visible conversation context.\n"
+        "\n"
+        "Core rules:\n"
+        "1. Treat the retrieved document context as the source of truth.\n"
+        "2. Do not invent facts, numbers, names, dates, page references, or conclusions that are not supported by the context.\n"
+        "3. If the retrieved context is missing, weak, ambiguous, or insufficient, say so clearly and briefly.\n"
+        "4. If the user's question is ambiguous, answer cautiously using the strongest supported interpretation and explicitly note uncertainty.\n"
+        "5. If the user asks for a summary, comparison, extraction, or explanation, do it only from the provided evidence.\n"
+        "6. Prefer direct, helpful answers over meta commentary.\n"
+        "7. When citing evidence, mention page numbers only when they are present in the supplied context.\n"
+        "8. If multiple retrieved snippets conflict, acknowledge the conflict instead of choosing an unsupported answer.\n"
+        "9. Never claim the document says something unless the supplied context supports that claim.\n"
+        "\n"
+        "Answer style:\n"
+        "- Start with the answer, not with filler.\n"
+        "- Be concise for simple factual questions.\n"
+        "- Use a short structured format when the question is complex.\n"
+        "- If the answer is not fully supported, say: 'I don't have enough support in the retrieved document context to answer that confidently.'\n"
+        "- If helpful, end with a brief note such as 'Supported by pages X-Y.'"
+    )
     PINECONE_API_KEY: str = ""
     PINECONE_INDEX_NAME: str = ""
     PINECONE_INDEX_HOST: str = ""
@@ -124,6 +152,8 @@ class Settings(BaseSettings):
         "JWT_AUDIENCE",
         "DOCUMENT_UPLOAD_DIR",
         "OPENAI_API_KEY",
+        "CHAT_MODEL",
+        "CHAT_SYSTEM_PROMPT",
         "EMBEDDING_MODEL",
         "PINECONE_API_KEY",
         "PINECONE_INDEX_NAME",
@@ -224,6 +254,20 @@ class Settings(BaseSettings):
             raise ValueError("DOCUMENT_CHUNK_OVERLAP must be smaller than DOCUMENT_CHUNK_SIZE")
         if self.OPENAI_EMBEDDING_TIMEOUT_SECONDS < 1:
             raise ValueError("OPENAI_EMBEDDING_TIMEOUT_SECONDS must be greater than 0")
+        if self.OPENAI_CHAT_TIMEOUT_SECONDS < 1:
+            raise ValueError("OPENAI_CHAT_TIMEOUT_SECONDS must be greater than 0")
+        if not self.CHAT_MODEL.strip():
+            raise ValueError("CHAT_MODEL must not be empty")
+        if self.CHAT_MAX_CONTEXT_CHUNKS < 1:
+            raise ValueError("CHAT_MAX_CONTEXT_CHUNKS must be greater than 0")
+        if self.CHAT_MAX_HISTORY_MESSAGES < 1:
+            raise ValueError("CHAT_MAX_HISTORY_MESSAGES must be greater than 0")
+        if self.CHAT_MAX_OUTPUT_TOKENS < 1:
+            raise ValueError("CHAT_MAX_OUTPUT_TOKENS must be greater than 0")
+        if not 0 <= self.CHAT_TEMPERATURE <= 2:
+            raise ValueError("CHAT_TEMPERATURE must be between 0 and 2")
+        if not self.CHAT_SYSTEM_PROMPT.strip():
+            raise ValueError("CHAT_SYSTEM_PROMPT must not be empty")
         if not self.EMBEDDING_MODEL.strip():
             raise ValueError("EMBEDDING_MODEL must not be empty")
         if self.EMBEDDING_DIMENSION < 1:
