@@ -68,7 +68,7 @@ class UsageLog(Base):
     total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cost: Mapped[Decimal | None] = mapped_column(Numeric(12, 6), nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
     user = relationship("User", back_populates="usage_logs")
     document = relationship("Document", back_populates="usage_logs")
