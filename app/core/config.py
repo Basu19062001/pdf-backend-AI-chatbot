@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import List, Union
 
-from pydantic import field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -66,7 +66,10 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = "text-embedding-3-small"
     EMBEDDING_DIMENSION: int = 1536
     EMBEDDING_BATCH_SIZE: int = 100
-    CHAT_MODEL: str = "gpt-4.1-mini"
+    CHAT_MODEL: str = Field(
+        default="gpt-4o",
+        validation_alias=AliasChoices("CHAT_MODEL", "OPENAI_CHAT_MODEL"),
+    )
     CHAT_MAX_CONTEXT_CHUNKS: int = 6
     CHAT_MAX_HISTORY_MESSAGES: int = 10
     CHAT_MAX_OUTPUT_TOKENS: int = 900
