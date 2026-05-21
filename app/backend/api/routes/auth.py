@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from typing import Annotated
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
@@ -185,26 +187,7 @@ async def google_callback(
             device_context=_build_device_context(request, None),
         )
 
-        response = RedirectResponse(url=settings.FRONTEND_AUTH_SUCCESS_URL)
-
-        response.set_cookie(
-            key="access_token",
-            value=auth_response.access_token,
-            httponly=True,
-            secure=settings.secure_cookies,
-            samesite="lax",
-            max_age=auth_response.expires_in,
-        )
-
-        response.set_cookie(
-            key="refresh_token",
-            value=auth_response.refresh_token,
-            httponly=True,
-            secure=settings.secure_cookies,
-            samesite="lax",
-            max_age=auth_response.refresh_token_expires_in,
-        )
-
+        response = RedirectResponse(url=_build_google_success_url(auth_response))
         response.delete_cookie(settings.GOOGLE_OAUTH_STATE_COOKIE_NAME)
         return response
 
@@ -389,15 +372,29 @@ async def logout(
         ) from exc
 
 
-def _build_device_context(request: Request, payload: UserLoginRequest) -> DeviceSessionContext:
+def _build_device_context(request: Request, payload: UserLoginRequest | None) -> DeviceSessionContext:
     forwarded_for = request.headers.get("X-Forwarded-For", "")
     forwarded_ip = forwarded_for.split(",")[0].strip() if forwarded_for else None
     client_ip = forwarded_ip or (request.client.host if request.client else None)
 
     return DeviceSessionContext(
-        device_id=payload.device_id or request.headers.get("X-Device-Id"),
-        device_name=payload.device_name or request.headers.get("X-Device-Name"),
-        device_type=payload.device_type or request.headers.get("X-Device-Type") or "unknown",
+        device_id=(payload.device_id if payload else None) or request.headers.get("X-Device-Id"),
+        device_name=(payload.device_name if payload else None) or request.headers.get("X-Device-Name"),
+        device_type=(payload.device_type if payload else None) or request.headers.get("X-Device-Type") or "unknown",
         user_agent=request.headers.get("User-Agent"),
         ip_address=client_ip,
     )
+
+
+def _build_google_success_url(auth_response: AccessTokenResponse) -> str:
+    payload = auth_response.model_dump(mode="json")
+    fragment_params = {
+        "access_token": payload["access_token"],
+        "refresh_token": payload["refresh_token"],
+        "expires_at": payload["expires_at"],
+        "refresh_token_expires_at": payload["refresh_token_expires_at"],
+        "user": json.dumps(payload["user"], separators=(",", ":")),
+        "session": json.dumps(payload["session"], separators=(",", ":")),
+    }
+    separator = "&" if "#" in settings.FRONTEND_AUTH_SUCCESS_URL else "#"
+    return f"{settings.FRONTEND_AUTH_SUCCESS_URL}{separator}{urlencode(fragment_params)}"
