@@ -56,6 +56,16 @@ class Settings(BaseSettings):
     JWT_ISSUER: str = "pdf-chatbot-backend"
     JWT_AUDIENCE: str = "pdf-chatbot-clients"
 
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    GOOGLE_REDIRECT_URI: str = ""
+    GOOGLE_AUTH_URL: str = "https://accounts.google.com/o/oauth2/v2/auth"
+    GOOGLE_TOKEN_URL: str = "https://oauth2.googleapis.com/token"
+    GOOGLE_OAUTH_STATE_COOKIE_NAME: str = "google_oauth_state"
+    GOOGLE_OAUTH_STATE_EXPIRE_SECONDS: int = 300
+    FRONTEND_AUTH_SUCCESS_URL: str = "http://localhost:5173/auth/google/success"
+    FRONTEND_AUTH_ERROR_URL: str = "http://localhost:5173/login"
+
     DOCUMENT_UPLOAD_DIR: str = "uploads"
     DOCUMENT_MAX_FILE_SIZE_BYTES: int = 10 * 1024 * 1024
     DOCUMENT_CHUNK_SIZE: int = 1200
@@ -153,6 +163,14 @@ class Settings(BaseSettings):
         "JWT_ALGORITHM",
         "JWT_ISSUER",
         "JWT_AUDIENCE",
+        "GOOGLE_CLIENT_ID",
+        "GOOGLE_CLIENT_SECRET",
+        "GOOGLE_REDIRECT_URI",
+        "GOOGLE_AUTH_URL",
+        "GOOGLE_TOKEN_URL",
+        "GOOGLE_OAUTH_STATE_COOKIE_NAME",
+        "FRONTEND_AUTH_SUCCESS_URL",
+        "FRONTEND_AUTH_ERROR_URL",
         "DOCUMENT_UPLOAD_DIR",
         "OPENAI_API_KEY",
         "CHAT_MODEL",
@@ -245,6 +263,21 @@ class Settings(BaseSettings):
             raise ValueError("JWT_ACCESS_TOKEN_EXPIRE_MINUTES must be greater than 0")
         if self.JWT_REFRESH_TOKEN_EXPIRE_DAYS < 1:
             raise ValueError("JWT_REFRESH_TOKEN_EXPIRE_DAYS must be greater than 0")
+        if self.GOOGLE_CLIENT_ID or self.GOOGLE_CLIENT_SECRET or self.GOOGLE_REDIRECT_URI:
+            if not self.GOOGLE_CLIENT_ID.strip():
+                raise ValueError("GOOGLE_CLIENT_ID must be set when Google OAuth is enabled")
+            if not self.GOOGLE_CLIENT_SECRET.strip():
+                raise ValueError("GOOGLE_CLIENT_SECRET must be set when Google OAuth is enabled")
+            if not self.GOOGLE_REDIRECT_URI.strip():
+                raise ValueError("GOOGLE_REDIRECT_URI must be set when Google OAuth is enabled")
+            if not self.GOOGLE_REDIRECT_URI.startswith(("http://", "https://")):
+                raise ValueError("GOOGLE_REDIRECT_URI must be a valid URL")
+            if not self.FRONTEND_AUTH_SUCCESS_URL.startswith(("http://", "https://")):
+                raise ValueError("FRONTEND_AUTH_SUCCESS_URL must be a valid URL")
+            if not self.FRONTEND_AUTH_ERROR_URL.startswith(("http://", "https://")):
+                raise ValueError("FRONTEND_AUTH_ERROR_URL must be a valid URL")
+        if self.GOOGLE_OAUTH_STATE_EXPIRE_SECONDS < 60:
+            raise ValueError("GOOGLE_OAUTH_STATE_EXPIRE_SECONDS must be at least 60 seconds")
         if not self.DOCUMENT_UPLOAD_DIR.strip():
             raise ValueError("DOCUMENT_UPLOAD_DIR must not be empty")
         if self.DOCUMENT_MAX_FILE_SIZE_BYTES < 1:
@@ -336,7 +369,15 @@ class Settings(BaseSettings):
         """
 
         return self.database_url
-
+    
+    @property
+    def is_production(self) -> bool:
+        return self.ENVIRONMENT.lower() in {"production", "prod"}
+    
+    @property
+    def secure_cookies(self) -> bool:
+        return self.is_production
+    
     @property
     def redis_url(self) -> str:
         """
