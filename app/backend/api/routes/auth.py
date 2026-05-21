@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backend.api.auth_dependencies import CurrentAuthContext
@@ -21,6 +22,8 @@ from app.schemas.auth import (
 )
 from app.services.auth_service import AuthService
 from app.services.auth_session_service import AuthSessionService, DeviceSessionContext
+from app.services.google_auth_service import GoogleAuthService
+from app.core.config import settings
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -122,6 +125,94 @@ async def login(
             detail="Unable to process login at the moment",
         ) from exc
 
+@router.get("/google/start", summary="Start Google OAuth login")
+async def google_start(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+):
+    authorization_url, state = GoogleAuthService(session).build_authorization_url()
+
+    response = RedirectResponse(url=authorization_url)
+    response.set_cookie(
+        key=settings.GOOGLE_OAUTH_STATE_COOKIE_NAME,
+        value=state,
+        httponly=True,
+        secure=settings.secure_cookies,
+        samesite="lax",
+        max_age=settings.GOOGLE_OAUTH_STATE_EXPIRE_SECONDS,
+    )
+    return response
+
+
+@router.get("/google/callback", summary="Handle Google OAuth callback")
+async def google_callback(
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+):
+    if error:
+        return RedirectResponse(
+            url=f"{settings.FRONTEND_AUTH_ERROR_URL}?error=google_access_denied"
+        )
+
+    saved_state = request.cookies.get(settings.GOOGLE_OAUTH_STATE_COOKIE_NAME)
+
+    if not code:
+        return RedirectResponse(
+            url=f"{settings.FRONTEND_AUTH_ERROR_URL}?error=missing_google_code"
+        )
+
+    if not state or not saved_state or state != saved_state:
+        return RedirectResponse(
+            url=f"{settings.FRONTEND_AUTH_ERROR_URL}?error=invalid_google_state"
+        )
+
+    try:
+        service = GoogleAuthService(session)
+        token_response = await service.exchange_code_for_tokens(code)
+
+        raw_id_token = token_response.get("id_token")
+        if not raw_id_token:
+            return RedirectResponse(
+                url=f"{settings.FRONTEND_AUTH_ERROR_URL}?error=missing_google_id_token"
+            )
+
+        google_payload = service.verify_google_id_token(raw_id_token)
+
+        auth_response = await service.login_or_create_user(
+            google_payload=google_payload,
+            device_context=_build_device_context(request, None),
+        )
+
+        response = RedirectResponse(url=settings.FRONTEND_AUTH_SUCCESS_URL)
+
+        response.set_cookie(
+            key="access_token",
+            value=auth_response.access_token,
+            httponly=True,
+            secure=settings.secure_cookies,
+            samesite="lax",
+            max_age=auth_response.expires_in,
+        )
+
+        response.set_cookie(
+            key="refresh_token",
+            value=auth_response.refresh_token,
+            httponly=True,
+            secure=settings.secure_cookies,
+            samesite="lax",
+            max_age=auth_response.refresh_token_expires_in,
+        )
+
+        response.delete_cookie(settings.GOOGLE_OAUTH_STATE_COOKIE_NAME)
+        return response
+
+    except Exception:
+        logger.exception("Google callback failed.")
+        return RedirectResponse(
+            url=f"{settings.FRONTEND_AUTH_ERROR_URL}?error=google_login_failed"
+        )
 
 @router.post(
     "/refresh",
