@@ -50,12 +50,17 @@ class DocumentStorageService:
             relative_path=relative_path,
         )
 
-    async def delete_file(self, absolute_path: Path) -> None:
+    async def delete_file(self, absolute_path: Path) -> bool:
         try:
             if absolute_path.exists():
                 await asyncio.to_thread(absolute_path.unlink)
+                logger.info("Deleted stored PDF '%s'.", absolute_path)
+                return True
+            logger.info("Stored PDF '%s' was already absent.", absolute_path)
+            return False
         except OSError:
             logger.exception("Failed to delete stored PDF '%s'.", absolute_path)
+            return False
 
     def _build_stored_file_name(self, original_file_name: str) -> str:
         stem = Path(original_file_name).stem
