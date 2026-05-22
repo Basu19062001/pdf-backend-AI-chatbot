@@ -3,6 +3,7 @@ from typing import List, Union
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import URL
 
 
 class Settings(BaseSettings):
@@ -29,6 +30,7 @@ class Settings(BaseSettings):
     DB_PORT: int = 5432
     DB_NAME: str = "pdf_chatbot_db"
     DB_ECHO: bool = False
+    DB_SSLMODE: str = "disable"
     DB_POOL_SIZE: int = 10
     DB_MAX_OVERFLOW: int = 20
     DB_POOL_TIMEOUT: int = 30
@@ -157,6 +159,7 @@ class Settings(BaseSettings):
         "DB_PASSWORD",
         "DB_HOST",
         "DB_NAME",
+        "DB_SSLMODE",
         "DOC_ROOT_USERNAME",
         "DOC_ROOT_PASSWORD",
         "JWT_SECRET_KEY",
@@ -243,6 +246,10 @@ class Settings(BaseSettings):
             raise ValueError("DOC_ROOT_USERNAME and DOC_ROOT_PASSWORD must be set when docs are enabled")
         if self.DB_SCHEME not in {"postgresql+asyncpg", "postgresql"}:
             raise ValueError("DB_SCHEME must be 'postgresql+asyncpg' or 'postgresql'")
+        if self.DB_SSLMODE not in {"disable", "allow", "prefer", "require", "verify-ca", "verify-full"}:
+            raise ValueError(
+                "DB_SSLMODE must be one of: disable, allow, prefer, require, verify-ca, verify-full"
+            )
         if self.DB_PORT < 1:
             raise ValueError("DB_PORT must be greater than 0")
         if self.DB_POOL_SIZE < 1:
@@ -355,20 +362,35 @@ class Settings(BaseSettings):
     @property
     def database_url(self) -> str:
         scheme = self.DB_SCHEME
+
         if scheme == "postgresql":
             scheme = "postgresql+asyncpg"
-        return f"{scheme}://{self.DB_USERNAME}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+
+        query = {"ssl": self.DB_SSLMODE} if self.DB_SSLMODE != "disable" else {}
+
+        return URL.create(
+            drivername=scheme,
+            username=self.DB_USERNAME,
+            password=self.DB_PASSWORD,
+            host=self.DB_HOST,
+            port=self.DB_PORT,
+            database=self.DB_NAME,
+            query=query,
+        ).render_as_string(hide_password=False)
 
     @property
     def alembic_database_url(self) -> str:
-        """
-        Database URL consumed by Alembic.
+        query = {"ssl": self.DB_SSLMODE} if self.DB_SSLMODE != "disable" else {}
 
-        Alembic in this project uses the same connection settings as the app
-        itself so there is a single source of truth for database configuration.
-        """
-
-        return self.database_url
+        return URL.create(
+            drivername="postgresql+asyncpg",
+            username=self.DB_USERNAME,
+            password=self.DB_PASSWORD,
+            host=self.DB_HOST,
+            port=self.DB_PORT,
+            database=self.DB_NAME,
+            query=query,
+        ).render_as_string(hide_password=False)
     
     @property
     def is_production(self) -> bool:
