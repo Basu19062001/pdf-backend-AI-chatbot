@@ -3,7 +3,7 @@ from typing import List, Union
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from sqlalchemy.engine import URL
+from sqlalchemy.engine import URL, make_url
 
 
 class Settings(BaseSettings):
@@ -23,6 +23,7 @@ class Settings(BaseSettings):
 
     API_V1_STR: str = "/api/v1"
 
+    DATABASE_URL: str = ""
     DB_SCHEME: str = "postgresql+asyncpg"
     DB_USERNAME: str = "admin"
     DB_PASSWORD: str = "password"
@@ -125,6 +126,7 @@ class Settings(BaseSettings):
     PDF_ANALYSIS_MIN_TABLE_COLUMNS: int = 2
     PDF_ANALYSIS_TABLE_DENSITY_THRESHOLD: float = 0.3
 
+    REDIS_URL: str = ""
     REDIS_ENABLED: bool = True
     REDIS_SCHEME: str = "redis"
     REDIS_HOST: str = "localhost"
@@ -154,6 +156,7 @@ class Settings(BaseSettings):
         "VERSION",
         "ENVIRONMENT",
         "LOG_LEVEL",
+        "DATABASE_URL",
         "DB_SCHEME",
         "DB_USERNAME",
         "DB_PASSWORD",
@@ -186,6 +189,7 @@ class Settings(BaseSettings):
         "PINECONE_REGION",
         "PINECONE_NAMESPACE",
         "PINECONE_METRIC",
+        "REDIS_URL",
         "REDIS_SCHEME",
         "REDIS_HOST",
         "REDIS_PASSWORD",
@@ -361,6 +365,9 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> str:
+        if self.DATABASE_URL:
+            return self._normalize_database_url(self.DATABASE_URL)
+
         scheme = self.DB_SCHEME
 
         if scheme == "postgresql":
@@ -380,6 +387,9 @@ class Settings(BaseSettings):
 
     @property
     def alembic_database_url(self) -> str:
+        if self.DATABASE_URL:
+            return self._normalize_database_url(self.DATABASE_URL)
+
         query = {"ssl": self.DB_SSLMODE} if self.DB_SSLMODE != "disable" else {}
 
         return URL.create(
@@ -391,6 +401,19 @@ class Settings(BaseSettings):
             database=self.DB_NAME,
             query=query,
         ).render_as_string(hide_password=False)
+
+    def _normalize_database_url(self, database_url: str) -> str:
+        url = make_url(database_url)
+        if url.drivername == "postgresql":
+            url = url.set(drivername="postgresql+asyncpg")
+
+        query = dict(url.query)
+        sslmode = query.pop("sslmode", None)
+        if sslmode and "ssl" not in query:
+            query["ssl"] = sslmode
+        query.pop("channel_binding", None)
+
+        return url.set(query=query).render_as_string(hide_password=False)
     
     @property
     def is_production(self) -> bool:
@@ -408,6 +431,9 @@ class Settings(BaseSettings):
         This mirrors the database configuration style so deployment environments
         can provide Redis settings as discrete variables.
         """
+
+        if self.REDIS_URL:
+            return self.REDIS_URL
 
         credentials = ""
         if self.REDIS_PASSWORD:
