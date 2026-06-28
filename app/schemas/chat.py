@@ -27,10 +27,19 @@ class ChatMessageCreate(BaseModel):
             raise ValueError("content must not be empty")
         return normalized
 
+    @field_validator("content")
+    @classmethod
+    def validate_content(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("content must not be empty")
+        return normalized
+
 
 class ChatMessageResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
+    id: uuid.UUID
     id: uuid.UUID
     role: str
     content: str
@@ -55,6 +64,8 @@ class ChatSessionSummaryResponse(BaseModel):
     document_id: uuid.UUID
     title: str | None = None
     status: str
+    started_at: datetime
+    last_message_at: datetime | None = None
     started_at: datetime
     last_message_at: datetime | None = None
     created_at: datetime

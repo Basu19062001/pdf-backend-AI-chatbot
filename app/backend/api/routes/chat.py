@@ -67,7 +67,7 @@ async def list_sessions(
 
 
 @router.post(
-    "/sessions",
+    "/",
     response_model=ChatSessionResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create a chat session for a processed document",

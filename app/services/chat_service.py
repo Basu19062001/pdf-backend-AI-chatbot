@@ -24,6 +24,7 @@ from app.models.usage_log import UsageLog
 from app.schemas.chat import (
     ChatMessageCreate,
     ChatMessageResponse,
+    ChatMessageSourceResponse,
     ChatSessionCreate,
     ChatSessionResponse,
     ChatSessionSummaryResponse,

@@ -182,6 +182,8 @@ class Settings(BaseSettings):
         "CHAT_MODEL",
         "CHAT_SYSTEM_PROMPT",
         "EMBEDDING_MODEL",
+        "OPENAI_CHAT_MODEL",
+        "CHAT_SYSTEM_PROMPT",
         "PINECONE_API_KEY",
         "PINECONE_INDEX_NAME",
         "PINECONE_INDEX_HOST",
@@ -242,6 +244,16 @@ class Settings(BaseSettings):
             values["DOC_ROOT_PASSWORD"] = values["DOCS_PASSWORD"]
         if not values.get("REDIS_KEY_PREFIX") and values.get("REDIS_TOKEN_KEY_PREFIX"):
             values["REDIS_KEY_PREFIX"] = values["REDIS_TOKEN_KEY_PREFIX"]
+        debug_value = values.get("DEBUG")
+        debug_enabled = False
+        if isinstance(debug_value, bool):
+            debug_enabled = debug_value
+        elif isinstance(debug_value, str):
+            normalized_debug = debug_value.strip().strip('"').strip("'").lower()
+            debug_enabled = normalized_debug in {"1", "true", "yes", "on", "debug", "development", "dev"}
+
+        if debug_enabled and not values.get("LOG_LEVEL"):
+            values["LOG_LEVEL"] = "DEBUG"
         return values
 
     @model_validator(mode="after")
@@ -321,6 +333,28 @@ class Settings(BaseSettings):
             raise ValueError("EMBEDDING_DIMENSION must be greater than 0")
         if self.EMBEDDING_BATCH_SIZE < 1:
             raise ValueError("EMBEDDING_BATCH_SIZE must be greater than 0")
+        if not self.OPENAI_CHAT_MODEL.strip():
+            raise ValueError("OPENAI_CHAT_MODEL must not be empty")
+        if self.OPENAI_CHAT_TIMEOUT_SECONDS < 1:
+            raise ValueError("OPENAI_CHAT_TIMEOUT_SECONDS must be greater than 0")
+        if self.OPENAI_CHAT_MAX_COMPLETION_TOKENS < 1:
+            raise ValueError("OPENAI_CHAT_MAX_COMPLETION_TOKENS must be greater than 0")
+        if not 0 <= self.OPENAI_CHAT_TEMPERATURE <= 2:
+            raise ValueError("OPENAI_CHAT_TEMPERATURE must be between 0 and 2")
+        if self.OPENAI_CHAT_INPUT_COST_PER_1M_TOKENS < 0:
+            raise ValueError("OPENAI_CHAT_INPUT_COST_PER_1M_TOKENS must be greater than or equal to 0")
+        if self.OPENAI_CHAT_OUTPUT_COST_PER_1M_TOKENS < 0:
+            raise ValueError("OPENAI_CHAT_OUTPUT_COST_PER_1M_TOKENS must be greater than or equal to 0")
+        if self.CHAT_RETRIEVAL_TOP_K < 1:
+            raise ValueError("CHAT_RETRIEVAL_TOP_K must be greater than 0")
+        if self.CHAT_HISTORY_MESSAGE_LIMIT < 0:
+            raise ValueError("CHAT_HISTORY_MESSAGE_LIMIT must be greater than or equal to 0")
+        if self.CHAT_MAX_CONTEXT_CHARACTERS < 1:
+            raise ValueError("CHAT_MAX_CONTEXT_CHARACTERS must be greater than 0")
+        if self.CHAT_SOURCE_TEXT_MAX_CHARACTERS < 1:
+            raise ValueError("CHAT_SOURCE_TEXT_MAX_CHARACTERS must be greater than 0")
+        if not self.CHAT_SYSTEM_PROMPT.strip():
+            raise ValueError("CHAT_SYSTEM_PROMPT must not be empty")
         if self.PINECONE_INDEX_NAME and not self.PINECONE_INDEX_NAME.replace("-", "").replace("_", "").isalnum():
             raise ValueError("PINECONE_INDEX_NAME may contain only letters, numbers, hyphens, and underscores")
         if self.PINECONE_CLOUD not in {"aws", "gcp", "azure"}:
