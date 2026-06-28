@@ -14,7 +14,9 @@ services:
     restart: unless-stopped
     depends_on:
       - redis-stack
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: >
+      sh -c "alembic upgrade head &&
+      uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 
   redis-stack:
     image: redis/redis-stack-server:latest

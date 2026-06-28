@@ -120,41 +120,59 @@ docker-logs:
 migration:
 	@if [ -x "$(ALEMBIC)" ]; then \
 		"$(ALEMBIC)" revision --autogenerate -m "$(MESSAGE)"; \
+	elif command -v alembic >/dev/null 2>&1; then \
+		alembic revision --autogenerate -m "$(MESSAGE)"; \
 	else \
-		$(PYTHON) -m alembic revision --autogenerate -m "$(MESSAGE)"; \
+		echo "Alembic command not found. Run 'make install' first."; \
+		exit 1; \
 	fi
 
 migrate-up:
 	@if [ -x "$(ALEMBIC)" ]; then \
 		"$(ALEMBIC)" upgrade head; \
+	elif command -v alembic >/dev/null 2>&1; then \
+		alembic upgrade head; \
 	else \
-		$(PYTHON) -m alembic upgrade head; \
+		echo "Alembic command not found. Run 'make install' first."; \
+		exit 1; \
 	fi
 
 migrate-down:
 	@if [ -x "$(ALEMBIC)" ]; then \
 		"$(ALEMBIC)" downgrade -1; \
+	elif command -v alembic >/dev/null 2>&1; then \
+		alembic downgrade -1; \
 	else \
-		$(PYTHON) -m alembic downgrade -1; \
+		echo "Alembic command not found. Run 'make install' first."; \
+		exit 1; \
 	fi
 
 migrate-current:
 	@if [ -x "$(ALEMBIC)" ]; then \
 		"$(ALEMBIC)" current; \
+	elif command -v alembic >/dev/null 2>&1; then \
+		alembic current; \
 	else \
-		$(PYTHON) -m alembic current; \
+		echo "Alembic command not found. Run 'make install' first."; \
+		exit 1; \
 	fi
 
 migrate-history:
 	@if [ -x "$(ALEMBIC)" ]; then \
 		"$(ALEMBIC)" history; \
+	elif command -v alembic >/dev/null 2>&1; then \
+		alembic history; \
 	else \
-		$(PYTHON) -m alembic history; \
+		echo "Alembic command not found. Run 'make install' first."; \
+		exit 1; \
 	fi
 
 migrate-heads:
 	@if [ -x "$(ALEMBIC)" ]; then \
 		"$(ALEMBIC)" heads; \
+	elif command -v alembic >/dev/null 2>&1; then \
+		alembic heads; \
 	else \
-		$(PYTHON) -m alembic heads; \
+		echo "Alembic command not found. Run 'make install' first."; \
+		exit 1; \
 	fi
