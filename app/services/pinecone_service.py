@@ -24,7 +24,7 @@ class VectorRecord:
 
 
 @dataclass(slots=True)
-class QueryMatch:
+class VectorMatch:
     vector_id: str
     score: float
     metadata: dict[str, str | int | float | bool | list[str] | list[int] | list[float]]
@@ -168,56 +168,83 @@ class PineconeService:
             return
         await asyncio.to_thread(self._delete_vectors_sync, list(vector_ids))
 
-    async def query_similar(
+    async def query_vectors(
         self,
-        vector: Sequence[float],
+        values: Sequence[float],
+        *,
         top_k: int,
-        metadata_filter: dict[str, object] | None = None,
-    ) -> list[QueryMatch]:
-        if not vector:
-            return []
+        document_id: str,
+        user_id: str,
+    ) -> list[VectorMatch]:
+        if not values:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="A query embedding is required to search Pinecone",
+            )
         return await asyncio.to_thread(
-            self._query_similar_sync,
-            list(vector),
+            self._query_vectors_sync,
+            list(values),
             top_k,
-            metadata_filter,
+            document_id,
+            user_id,
         )
 
-    def _query_similar_sync(
+    def _query_vectors_sync(
         self,
-        vector: list[float],
+        values: list[float],
         top_k: int,
-        metadata_filter: dict[str, object] | None,
-    ) -> list[QueryMatch]:
+        document_id: str,
+        user_id: str,
+    ) -> list[VectorMatch]:
         try:
             index = self._get_index()
             logger.info(
-                "Querying Pinecone for similar chunks. top_k=%s index='%s' namespace='%s'",
+                "Querying Pinecone for chat retrieval. top_k=%s index='%s' namespace='%s' document_id='%s'",
                 top_k,
                 settings.PINECONE_INDEX_NAME,
                 self._namespace() or "<default>",
+                document_id,
             )
             response = index.query(
-                vector=vector,
+                vector=values,
                 top_k=top_k,
-                namespace=self._namespace(),
                 include_metadata=True,
-                filter=metadata_filter,
+                namespace=self._namespace(),
+                filter={
+                    "document_id": {"$eq": document_id},
+                    "user_id": {"$eq": user_id},
+                },
             )
-            matches = getattr(response, "matches", None) or []
-            return [
-                QueryMatch(
-                    vector_id=match.id,
-                    score=float(match.score or 0.0),
-                    metadata=dict(match.metadata or {}),
+            matches = getattr(response, "matches", None)
+            if matches is None:
+                matches = response.get("matches", [])
+            vector_matches: list[VectorMatch] = []
+            for match in matches:
+                if hasattr(match, "id"):
+                    vector_id = match.id
+                    score = match.score
+                    metadata = match.metadata
+                else:
+                    vector_id = match["id"]
+                    score = match.get("score")
+                    metadata = match.get("metadata")
+                vector_matches.append(
+                    VectorMatch(
+                        vector_id=vector_id,
+                        score=float(score or 0),
+                        metadata=dict(metadata or {}),
+                    )
                 )
-                for match in matches
-            ]
+            return vector_matches
         except PineconeException as exc:
-            logger.exception("Pinecone similarity search failed for index '%s'.", settings.PINECONE_INDEX_NAME)
+            logger.exception(
+                "Pinecone query failed for document '%s' in index '%s'.",
+                document_id,
+                settings.PINECONE_INDEX_NAME,
+            )
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Unable to retrieve similar document chunks from Pinecone",
+                detail="Unable to query document vectors from Pinecone",
             ) from exc
 
     def _delete_vectors_sync(self, vector_ids: list[str]) -> None:

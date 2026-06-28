@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from decimal import Decimal, ROUND_HALF_UP
+import asyncio
+import json
 import uuid
+from dataclasses import dataclass
+from decimal import Decimal
+from typing import AsyncIterator
 
 from fastapi import HTTPException, status
-from sqlalchemy import Select, select
+from sqlalchemy import Select, inspect, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -21,13 +24,15 @@ from app.models.usage_log import UsageLog
 from app.schemas.chat import (
     ChatMessageCreate,
     ChatMessageResponse,
-    ChatMessageSourceResponse,
     ChatSessionCreate,
     ChatSessionResponse,
+    ChatSessionSummaryResponse,
+    ChatSourceResponse,
+    ChatTurnResponse,
 )
 from app.services.embedding_service import EmbeddingService
-from app.services.llm_service import LLMService
-from app.services.pinecone_service import PineconeService, QueryMatch
+from app.services.llm_service import GeneratedAnswer, LLMService
+from app.services.pinecone_service import PineconeService, VectorMatch
 from app.utils import utc_now
 
 logger = get_logger(__name__)
@@ -37,27 +42,25 @@ logger = get_logger(__name__)
 class RetrievedChunk:
     chunk: DocumentChunk
     score: float
-    rank: int
+    source_rank: int
 
 
 class ChatService:
-    """Persist chat sessions and run retrieval-augmented answers over uploaded documents."""
-
     def __init__(self, session: AsyncSession):
         self.session = session
         self.embedding_service = EmbeddingService()
         self.pinecone_service = PineconeService()
         self.llm_service = LLMService()
 
-    async def list_sessions(self, user_id: uuid.UUID) -> list[ChatSessionResponse]:
+    async def list_sessions(self, user_id: uuid.UUID) -> list[ChatSessionSummaryResponse]:
         try:
             statement: Select[tuple[ChatSession]] = (
                 select(ChatSession)
                 .where(ChatSession.user_id == user_id)
-                .order_by(ChatSession.updated_at.desc(), ChatSession.created_at.desc())
+                .order_by(ChatSession.updated_at.desc())
             )
             sessions = list((await self.session.scalars(statement)).all())
-            return [self._build_session_response(session, include_messages=False) for session in sessions]
+            return [self._to_session_summary_response(session) for session in sessions]
         except SQLAlchemyError as exc:
             logger.exception("Failed to list chat sessions for user '%s'.", user_id)
             raise HTTPException(
@@ -66,325 +69,420 @@ class ChatService:
             ) from exc
 
     async def create_session(self, user_id: uuid.UUID, payload: ChatSessionCreate) -> ChatSessionResponse:
-        document = await self._load_chat_ready_document(user_id, payload.document_id)
-        session_title = payload.title or document.title or document.original_file_name
-        session_row = ChatSession(
+        document = await self._get_owned_document(user_id, payload.document_id)
+        now = utc_now()
+        session = ChatSession(
+            id=uuid.uuid4(),
             user_id=user_id,
             document_id=document.id,
-            title=session_title,
+            title=payload.title.strip() if payload.title and payload.title.strip() else document.title,
             status="active",
-            started_at=utc_now(),
+            started_at=now,
+            created_at=now,
+            updated_at=now,
         )
-        self.session.add(session_row)
         try:
+            self.session.add(session)
             await self.session.commit()
-            await self.session.refresh(session_row)
-            logger.info(
-                "Created chat session '%s' for user '%s' and document '%s'.",
-                session_row.id,
-                user_id,
-                document.id,
-            )
-            return self._build_session_response(session_row, include_messages=False)
+            await self.session.refresh(session)
+            return await self.get_session(user_id, session.id)
         except SQLAlchemyError as exc:
             await self.session.rollback()
-            logger.exception("Failed to create chat session for user '%s' and document '%s'.", user_id, document.id)
+            logger.exception("Failed to create chat session for user '%s'.", user_id)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Unable to create a chat session at the moment",
             ) from exc
 
     async def get_session(self, user_id: uuid.UUID, session_id: uuid.UUID) -> ChatSessionResponse | None:
-        try:
-            session_row = await self._load_owned_session(user_id, session_id)
-            if session_row is None:
-                return None
-            return self._build_session_response(session_row, include_messages=True)
-        except SQLAlchemyError as exc:
-            logger.exception("Failed to load chat session '%s' for user '%s'.", session_id, user_id)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Unable to load the requested chat session at the moment",
-            ) from exc
-
-    async def add_message(self, user_id: uuid.UUID, session_id: uuid.UUID, payload: ChatMessageCreate) -> ChatSessionResponse | None:
-        if payload.role != "user":
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Only user messages can be submitted to this endpoint",
-            )
-
-        session_row = await self._load_owned_session(user_id, session_id)
-        if session_row is None:
+        session = await self._load_session(user_id, session_id)
+        if session is None:
             return None
-        if session_row.status != "active":
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Only active chat sessions can accept new messages",
-            )
-        if session_row.document.status != "processed":
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="The linked document is not ready for chat yet",
-            )
+        return self._to_session_response(session)
 
-        question = payload.content.strip()
-        user_message = ChatMessage(
-            chat_session_id=session_row.id,
-            role="user",
-            content=question,
+    async def answer_question(
+        self,
+        *,
+        user_id: uuid.UUID,
+        session_id: uuid.UUID,
+        payload: ChatMessageCreate,
+    ) -> ChatTurnResponse:
+        session = await self._require_session(user_id, session_id)
+        document = await self._get_owned_document(user_id, session.document_id)
+        self._ensure_document_ready(document)
+
+        user_message = await self._create_user_message(session, payload.content)
+        retrieved_chunks = await self._retrieve_context(
+            user_id=user_id,
+            document=document,
+            question=payload.content,
         )
-        now = utc_now()
+        generated_answer = await self.llm_service.answer_question(
+            prompt=self._build_prompt(
+                session=session,
+                document=document,
+                question=payload.content,
+                retrieved_chunks=retrieved_chunks,
+            ),
+            user_reference=str(user_id),
+            model_name=payload.model_name,
+        )
+        assistant_message = await self._create_assistant_message(
+            session=session,
+            generated_answer=generated_answer,
+            retrieved_chunks=retrieved_chunks,
+        )
+        full_session = await self._require_session(user_id, session_id)
+        return ChatTurnResponse(
+            session=self._to_session_response(full_session),
+            user_message=self._to_message_response(user_message),
+            assistant_message=self._to_message_response(assistant_message),
+        )
+
+    async def stream_answer(
+        self,
+        *,
+        user_id: uuid.UUID,
+        session_id: uuid.UUID,
+        payload: ChatMessageCreate,
+    ) -> AsyncIterator[str]:
+        session = await self._require_session(user_id, session_id)
+        document = await self._get_owned_document(user_id, session.document_id)
+        self._ensure_document_ready(document)
+
+        user_message = await self._create_user_message(session, payload.content)
+        retrieved_chunks = await self._retrieve_context(
+            user_id=user_id,
+            document=document,
+            question=payload.content,
+        )
+
+        assistant_message_id = uuid.uuid4()
+        model_name = (payload.model_name or settings.CHAT_MODEL).strip()
+        prompt = self._build_prompt(
+            session=session,
+            document=document,
+            question=payload.content,
+            retrieved_chunks=retrieved_chunks,
+        )
+
+        yield self._sse_event(
+            "message_start",
+            {
+                "session_id": str(session.id),
+                "user_message_id": str(user_message.id),
+                "assistant_message_id": str(assistant_message_id),
+                "model_name": model_name,
+                "sources": [self._source_payload(item) for item in retrieved_chunks],
+            },
+        )
 
         try:
-            question_embedding = (
-                await self.embedding_service.create_embeddings([question], user_reference=str(user_id))
-            )[0]
-            retrieved_chunks = await self._retrieve_similar_chunks(
-                user_id=user_id,
-                document_id=session_row.document_id,
-                question_embedding=question_embedding,
-            )
-            answer = await self.llm_service.answer_question(
-                question=question,
-                context_blocks=self._build_context_blocks(retrieved_chunks),
-                conversation_history=self._build_conversation_history(session_row.messages),
-                model_name=payload.model_name,
+            async with self.llm_service.stream_answer(
+                prompt=prompt,
                 user_reference=str(user_id),
-            )
-            assistant_message = ChatMessage(
-                chat_session_id=session_row.id,
-                role="assistant",
-                content=answer.text,
-                llm_model=answer.model_name,
-                prompt_tokens=answer.prompt_tokens,
-                completion_tokens=answer.completion_tokens,
-                total_tokens=answer.total_tokens,
-                estimated_cost=self._estimate_cost(answer.prompt_tokens, answer.completion_tokens),
-            )
+                model_name=model_name,
+            ) as stream:
+                async for event in stream:
+                    if event.type == "response.output_text.delta" and event.delta:
+                        yield self._sse_event("message_delta", {"delta": event.delta})
+                    elif event.type == "response.failed":
+                        raise HTTPException(
+                            status_code=status.HTTP_502_BAD_GATEWAY,
+                            detail="OpenAI chat request failed",
+                        )
 
-            self.session.add(user_message)
-            self.session.add(assistant_message)
-            await self.session.flush()
+                final_response = await stream.get_final_response()
 
-            self.session.add_all(self._build_source_records(assistant_message.id, retrieved_chunks))
-            self.session.add(
-                UsageLog(
-                    user_id=user_id,
-                    document_id=session_row.document_id,
-                    session_id=session_row.id,
-                    action_type="chat_completion",
-                    provider="openai",
-                    model_name=answer.model_name,
-                    input_tokens=answer.prompt_tokens,
-                    output_tokens=answer.completion_tokens,
-                    total_tokens=answer.total_tokens,
-                    cost=assistant_message.estimated_cost,
-                )
+            generated_answer = self.llm_service.finalize_streamed_answer(
+                final_response,
+                fallback_model_name=model_name,
             )
-
-            session_row.last_message_at = now
-            session_row.updated_at = now
-            await self.session.commit()
-            logger.info(
-                "Persisted chat exchange for session '%s'. retrieved_chunks=%s model='%s'",
-                session_row.id,
-                len(retrieved_chunks),
-                answer.model_name,
+            assistant_message = await self._create_assistant_message(
+                session=session,
+                generated_answer=generated_answer,
+                retrieved_chunks=retrieved_chunks,
+                message_id=assistant_message_id,
             )
-        except HTTPException:
-            await self.session.rollback()
+            yield self._sse_event(
+                "message_complete",
+                {
+                    "assistant_message": self._message_payload(assistant_message),
+                },
+            )
+        except asyncio.CancelledError:
+            logger.info("Streaming client disconnected for chat session '%s'.", session.id)
             raise
-        except SQLAlchemyError as exc:
-            await self.session.rollback()
-            logger.exception("Failed to persist chat exchange for session '%s'.", session_row.id)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Unable to save the chat exchange at the moment",
-            ) from exc
+        except HTTPException as exc:
+            logger.warning("Streaming chat failed for session '%s': %s", session.id, exc.detail)
+            yield self._sse_event("error", {"detail": exc.detail})
+        except Exception:
+            logger.exception("Unexpected streaming error for chat session '%s'.", session.id)
+            yield self._sse_event("error", {"detail": "Unable to stream the assistant response"})
 
-        return await self.get_session(user_id, session_id)
-
-    async def _load_chat_ready_document(self, user_id: uuid.UUID, document_id: uuid.UUID) -> Document:
+    async def _get_owned_document(self, user_id: uuid.UUID, document_id: uuid.UUID) -> Document:
         statement: Select[tuple[Document]] = select(Document).where(
             Document.id == document_id,
             Document.user_id == user_id,
         )
         document = await self.session.scalar(statement)
-        logger.debug(f"document: {statement} | {document}")
         if document is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+        return document
+
+    def _ensure_document_ready(self, document: Document) -> None:
         if document.status != "processed":
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Document processing is not complete yet",
+                detail="The selected document is not ready for chat yet",
             )
-        return document
 
-    async def _load_owned_session(self, user_id: uuid.UUID, session_id: uuid.UUID) -> ChatSession | None:
+    async def _load_session(self, user_id: uuid.UUID, session_id: uuid.UUID) -> ChatSession | None:
         statement: Select[tuple[ChatSession]] = (
             select(ChatSession)
+            .where(ChatSession.id == session_id, ChatSession.user_id == user_id)
             .options(
-                selectinload(ChatSession.document),
-                selectinload(ChatSession.messages)
-                .selectinload(ChatMessage.sources)
-                .selectinload(MessageSource.chunk),
-            )
-            .where(
-                ChatSession.id == session_id,
-                ChatSession.user_id == user_id,
+                selectinload(ChatSession.messages).selectinload(ChatMessage.sources),
             )
         )
         return await self.session.scalar(statement)
 
-    async def _retrieve_similar_chunks(
+    async def _require_session(self, user_id: uuid.UUID, session_id: uuid.UUID) -> ChatSession:
+        session = await self._load_session(user_id, session_id)
+        if session is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+        return session
+
+    async def _create_user_message(self, session: ChatSession, content: str) -> ChatMessage:
+        now = utc_now()
+        message = ChatMessage(
+            id=uuid.uuid4(),
+            chat_session_id=session.id,
+            role="user",
+            content=content.strip(),
+            created_at=now,
+        )
+        session.last_message_at = now
+        session.updated_at = now
+        try:
+            self.session.add(message)
+            await self.session.commit()
+            await self.session.refresh(message)
+            return message
+        except SQLAlchemyError as exc:
+            await self.session.rollback()
+            logger.exception("Failed to persist user message for chat session '%s'.", session.id)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Unable to save the chat message",
+            ) from exc
+
+    async def _retrieve_context(
         self,
+        *,
         user_id: uuid.UUID,
-        document_id: uuid.UUID,
-        question_embedding: list[float],
+        document: Document,
+        question: str,
     ) -> list[RetrievedChunk]:
-        matches = await self.pinecone_service.query_similar(
-            vector=question_embedding,
-            top_k=settings.CHAT_RETRIEVAL_TOP_K,
-            metadata_filter={
-                "user_id": {"$eq": str(user_id)},
-                "document_id": {"$eq": str(document_id)},
-            },
+        query_embedding = (await self.embedding_service.create_embeddings([question], user_reference=str(user_id)))[0]
+        matches = await self.pinecone_service.query_vectors(
+            query_embedding,
+            top_k=settings.CHAT_MAX_CONTEXT_CHUNKS,
+            document_id=str(document.id),
+            user_id=str(user_id),
         )
         if not matches:
             return []
 
         chunk_ids_in_rank_order: list[uuid.UUID] = []
-        match_by_chunk_id: dict[uuid.UUID, QueryMatch] = {}
+        match_by_chunk_id: dict[uuid.UUID, VectorMatch] = {}
         for match in matches:
-            raw_chunk_id = match.metadata.get("chunk_id")
-            if not raw_chunk_id:
+            chunk_id_value = match.metadata.get("chunk_id")
+            if not isinstance(chunk_id_value, str):
                 continue
-            chunk_id = uuid.UUID(str(raw_chunk_id))
+            try:
+                chunk_id = uuid.UUID(chunk_id_value)
+            except ValueError:
+                continue
             chunk_ids_in_rank_order.append(chunk_id)
             match_by_chunk_id[chunk_id] = match
 
         if not chunk_ids_in_rank_order:
             return []
 
-        chunk_statement: Select[tuple[DocumentChunk]] = select(DocumentChunk).where(
-            DocumentChunk.document_id == document_id,
+        statement: Select[tuple[DocumentChunk]] = select(DocumentChunk).where(
+            DocumentChunk.document_id == document.id,
             DocumentChunk.id.in_(chunk_ids_in_rank_order),
         )
-        chunk_rows = list((await self.session.scalars(chunk_statement)).all())
-        chunks_by_id = {chunk.id: chunk for chunk in chunk_rows}
+        chunks = list((await self.session.scalars(statement)).all())
+        chunk_by_id = {chunk.id: chunk for chunk in chunks}
 
         retrieved_chunks: list[RetrievedChunk] = []
-        for index, chunk_id in enumerate(chunk_ids_in_rank_order, start=1):
-            chunk = chunks_by_id.get(chunk_id)
+        for rank, chunk_id in enumerate(chunk_ids_in_rank_order, start=1):
+            chunk = chunk_by_id.get(chunk_id)
             match = match_by_chunk_id.get(chunk_id)
             if chunk is None or match is None:
                 continue
             retrieved_chunks.append(
                 RetrievedChunk(
                     chunk=chunk,
-                    score=match.score,
-                    rank=index,
+                    score=min(max(match.score, 0.0), 1.0),
+                    source_rank=rank,
                 )
             )
         return retrieved_chunks
 
-    def _build_conversation_history(self, messages: list[ChatMessage]) -> list[tuple[str, str]]:
-        ordered_messages = sorted(messages, key=lambda item: item.created_at)
-        if settings.CHAT_HISTORY_MESSAGE_LIMIT == 0:
-            return []
-        recent_messages = ordered_messages[-settings.CHAT_HISTORY_MESSAGE_LIMIT :]
-        return [(message.role, message.content) for message in recent_messages]
-
-    def _build_context_blocks(self, retrieved_chunks: list[RetrievedChunk]) -> list[str]:
-        if not retrieved_chunks:
-            return []
-
-        context_blocks: list[str] = []
-        consumed_characters = 0
-        for retrieved_chunk in retrieved_chunks:
-            page_start = retrieved_chunk.chunk.page_number_start or "?"
-            page_end = retrieved_chunk.chunk.page_number_end or page_start
-            context_block = (
-                f"[Source {retrieved_chunk.rank} | pages {page_start}-{page_end} | score {retrieved_chunk.score:.4f}]\n"
-                f"{retrieved_chunk.chunk.chunk_text.strip()}"
-            )
-            block_length = len(context_block)
-            if context_blocks and consumed_characters + block_length > settings.CHAT_MAX_CONTEXT_CHARACTERS:
-                break
-            if not context_blocks and block_length > settings.CHAT_MAX_CONTEXT_CHARACTERS:
-                context_blocks.append(context_block[: settings.CHAT_MAX_CONTEXT_CHARACTERS])
-                break
-            context_blocks.append(context_block)
-            consumed_characters += block_length
-        return context_blocks
-
-    def _build_source_records(self, message_id: uuid.UUID, retrieved_chunks: list[RetrievedChunk]) -> list[MessageSource]:
-        source_records: list[MessageSource] = []
-        for retrieved_chunk in retrieved_chunks:
-            snippet = retrieved_chunk.chunk.chunk_text.strip()[: settings.CHAT_SOURCE_TEXT_MAX_CHARACTERS]
-            source_records.append(
-                MessageSource(
-                    message_id=message_id,
-                    chunk_id=retrieved_chunk.chunk.id,
-                    source_rank=retrieved_chunk.rank,
-                    similarity_score=retrieved_chunk.score,
-                    page_number_start=retrieved_chunk.chunk.page_number_start,
-                    page_number_end=retrieved_chunk.chunk.page_number_end,
-                    quoted_text=snippet,
-                )
-            )
-        return source_records
-
-    def _estimate_cost(self, prompt_tokens: int | None, completion_tokens: int | None) -> Decimal | None:
-        if prompt_tokens is None and completion_tokens is None:
-            return None
-        prompt_cost = (
-            Decimal(prompt_tokens or 0)
-            * Decimal(str(settings.OPENAI_CHAT_INPUT_COST_PER_1M_TOKENS))
-            / Decimal(1_000_000)
+    def _build_prompt(
+        self,
+        *,
+        session: ChatSession,
+        document: Document,
+        question: str,
+        retrieved_chunks: list[RetrievedChunk],
+    ) -> str:
+        conversation_history = [
+            (message.role, message.content)
+            for message in sorted(session.messages, key=lambda item: item.created_at)
+            if message.role in {"user", "assistant"}
+        ]
+        context_sections = [
+            self._format_context_section(item)
+            for item in retrieved_chunks
+        ]
+        return self.llm_service.build_prompt(
+            question=question,
+            document_title=document.title,
+            conversation_history=conversation_history,
+            context_sections=context_sections,
         )
-        completion_cost = (
-            Decimal(completion_tokens or 0)
-            * Decimal(str(settings.OPENAI_CHAT_OUTPUT_COST_PER_1M_TOKENS))
-            / Decimal(1_000_000)
+
+    async def _create_assistant_message(
+        self,
+        *,
+        session: ChatSession,
+        generated_answer: GeneratedAnswer,
+        retrieved_chunks: list[RetrievedChunk],
+        message_id: uuid.UUID | None = None,
+    ) -> ChatMessage:
+        now = utc_now()
+        usage = generated_answer.usage
+        prompt_tokens = usage.input_tokens if usage is not None else None
+        completion_tokens = usage.output_tokens if usage is not None else None
+        total_tokens = usage.total_tokens if usage is not None else None
+
+        assistant_message = ChatMessage(
+            id=message_id or uuid.uuid4(),
+            chat_session_id=session.id,
+            role="assistant",
+            content=generated_answer.content,
+            llm_model=generated_answer.model_name,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            created_at=now,
         )
-        total_cost = prompt_cost + completion_cost
-        return total_cost.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
+        source_rows = [
+            MessageSource(
+                message_id=assistant_message.id,
+                chunk_id=item.chunk.id,
+                source_rank=item.source_rank,
+                similarity_score=item.score,
+                page_number_start=item.chunk.page_number_start,
+                page_number_end=item.chunk.page_number_end,
+                quoted_text=self._quoted_text(item.chunk.chunk_text),
+                created_at=now,
+            )
+            for item in retrieved_chunks
+        ]
+        usage_log = UsageLog(
+            id=uuid.uuid4(),
+            user_id=session.user_id,
+            document_id=session.document_id,
+            session_id=session.id,
+            action_type="chat_completion",
+            provider="openai",
+            model_name=generated_answer.model_name,
+            input_tokens=prompt_tokens,
+            output_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            cost=Decimal("0"),
+            created_at=now,
+        )
 
-    def _build_session_response(self, session_row: ChatSession, include_messages: bool) -> ChatSessionResponse:
-        messages: list[ChatMessageResponse] = []
-        if include_messages:
-            ordered_messages = sorted(session_row.messages, key=lambda item: item.created_at)
-            messages = [self._build_message_response(message) for message in ordered_messages]
+        session.last_message_at = now
+        session.updated_at = now
+        try:
+            self.session.add(assistant_message)
+            if source_rows:
+                self.session.add_all(source_rows)
+            self.session.add(usage_log)
+            await self.session.commit()
+            await self.session.refresh(assistant_message)
+            await self.session.refresh(assistant_message, attribute_names=["sources"])
+            return assistant_message
+        except SQLAlchemyError as exc:
+            await self.session.rollback()
+            logger.exception("Failed to persist assistant message for chat session '%s'.", session.id)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Unable to save the assistant response",
+            ) from exc
 
+    def _format_context_section(self, item: RetrievedChunk) -> str:
+        page_start = item.chunk.page_number_start or "?"
+        page_end = item.chunk.page_number_end or page_start
+        return (
+            f"Source rank: {item.source_rank}\n"
+            f"Pages: {page_start}-{page_end}\n"
+            f"Similarity: {item.score:.3f}\n"
+            "Excerpt:\n"
+            f"{item.chunk.chunk_text.strip()}"
+        )
+
+    def _quoted_text(self, chunk_text: str) -> str:
+        normalized = " ".join(chunk_text.split())
+        if len(normalized) <= 400:
+            return normalized
+        return f"{normalized[:397]}..."
+
+    def _sse_event(self, event_name: str, payload: dict[str, object]) -> str:
+        return f"event: {event_name}\ndata: {json.dumps(payload, default=str)}\n\n"
+
+    def _to_session_summary_response(self, session: ChatSession) -> ChatSessionSummaryResponse:
+        return ChatSessionSummaryResponse.model_validate(session)
+
+    def _to_session_response(self, session: ChatSession) -> ChatSessionResponse:
+        ordered_messages = sorted(session.messages, key=lambda item: item.created_at)
         return ChatSessionResponse(
-            id=session_row.id,
-            user_id=session_row.user_id,
-            document_id=session_row.document_id,
-            title=session_row.title,
-            status=session_row.status,
-            started_at=session_row.started_at,
-            last_message_at=session_row.last_message_at,
-            created_at=session_row.created_at,
-            updated_at=session_row.updated_at,
-            messages=messages,
+            id=session.id,
+            user_id=session.user_id,
+            document_id=session.document_id,
+            title=session.title,
+            status=session.status,
+            started_at=session.started_at,
+            last_message_at=session.last_message_at,
+            created_at=session.created_at,
+            updated_at=session.updated_at,
+            messages=[self._to_message_response(message) for message in ordered_messages],
         )
 
-    def _build_message_response(self, message: ChatMessage) -> ChatMessageResponse:
-        ordered_sources = sorted(message.sources, key=lambda item: item.source_rank or 0)
+    def _to_message_response(self, message: ChatMessage) -> ChatMessageResponse:
+        ordered_sources: list[MessageSource]
+        if "sources" in inspect(message).unloaded:
+            ordered_sources = []
+        else:
+            ordered_sources = sorted(message.sources, key=lambda item: item.source_rank or 0)
         return ChatMessageResponse(
             id=message.id,
             role=message.role,
             content=message.content,
-            model_name=message.llm_model,
+            llm_model=message.llm_model,
             prompt_tokens=message.prompt_tokens,
             completion_tokens=message.completion_tokens,
             total_tokens=message.total_tokens,
-            estimated_cost=message.estimated_cost,
             created_at=message.created_at,
             sources=[
-                ChatMessageSourceResponse(
+                ChatSourceResponse(
                     chunk_id=source.chunk_id,
                     source_rank=source.source_rank,
                     similarity_score=source.similarity_score,
@@ -395,3 +493,17 @@ class ChatService:
                 for source in ordered_sources
             ],
         )
+
+    def _source_payload(self, item: RetrievedChunk) -> dict[str, object]:
+        return {
+            "chunk_id": str(item.chunk.id),
+            "source_rank": item.source_rank,
+            "similarity_score": item.score,
+            "page_number_start": item.chunk.page_number_start,
+            "page_number_end": item.chunk.page_number_end,
+            "quoted_text": self._quoted_text(item.chunk.chunk_text),
+        }
+
+    def _message_payload(self, message: ChatMessage) -> dict[str, object]:
+        response = self._to_message_response(message)
+        return response.model_dump(mode="json")

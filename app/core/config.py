@@ -1,8 +1,9 @@
 from functools import lru_cache
 from typing import List, Union
 
-from pydantic import field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import URL, make_url
 
 
 class Settings(BaseSettings):
@@ -22,6 +23,7 @@ class Settings(BaseSettings):
 
     API_V1_STR: str = "/api/v1"
 
+    DATABASE_URL: str = ""
     DB_SCHEME: str = "postgresql+asyncpg"
     DB_USERNAME: str = "admin"
     DB_PASSWORD: str = "password"
@@ -29,6 +31,7 @@ class Settings(BaseSettings):
     DB_PORT: int = 5432
     DB_NAME: str = "pdf_chatbot_db"
     DB_ECHO: bool = False
+    DB_SSLMODE: str = "disable"
     DB_POOL_SIZE: int = 10
     DB_MAX_OVERFLOW: int = 20
     DB_POOL_TIMEOUT: int = 30
@@ -56,53 +59,55 @@ class Settings(BaseSettings):
     JWT_ISSUER: str = "pdf-chatbot-backend"
     JWT_AUDIENCE: str = "pdf-chatbot-clients"
 
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    GOOGLE_REDIRECT_URI: str = ""
+    GOOGLE_AUTH_URL: str = "https://accounts.google.com/o/oauth2/v2/auth"
+    GOOGLE_TOKEN_URL: str = "https://oauth2.googleapis.com/token"
+    GOOGLE_OAUTH_STATE_COOKIE_NAME: str = "google_oauth_state"
+    GOOGLE_OAUTH_STATE_EXPIRE_SECONDS: int = 300
+    FRONTEND_AUTH_SUCCESS_URL: str = "http://localhost:5173/auth/google/success"
+    FRONTEND_AUTH_ERROR_URL: str = "http://localhost:5173/login"
+
     DOCUMENT_UPLOAD_DIR: str = "uploads"
     DOCUMENT_MAX_FILE_SIZE_BYTES: int = 10 * 1024 * 1024
     DOCUMENT_CHUNK_SIZE: int = 1200
     DOCUMENT_CHUNK_OVERLAP: int = 200
     OPENAI_API_KEY: str = ""
     OPENAI_EMBEDDING_TIMEOUT_SECONDS: int = 30
+    OPENAI_CHAT_TIMEOUT_SECONDS: int = 60
     EMBEDDING_MODEL: str = "text-embedding-3-small"
     EMBEDDING_DIMENSION: int = 1536
     EMBEDDING_BATCH_SIZE: int = 100
-    OPENAI_CHAT_MODEL: str = "gpt-4.1-mini"
-    OPENAI_CHAT_TIMEOUT_SECONDS: int = 45
-    OPENAI_CHAT_MAX_COMPLETION_TOKENS: int = 800
-    OPENAI_CHAT_TEMPERATURE: float = 0.2
-    OPENAI_CHAT_INPUT_COST_PER_1M_TOKENS: float = 0.0
-    OPENAI_CHAT_OUTPUT_COST_PER_1M_TOKENS: float = 0.0
-    CHAT_RETRIEVAL_TOP_K: int = 6
-    CHAT_HISTORY_MESSAGE_LIMIT: int = 8
-    CHAT_MAX_CONTEXT_CHARACTERS: int = 12000
-    CHAT_SOURCE_TEXT_MAX_CHARACTERS: int = 500
+    CHAT_MODEL: str = Field(
+        default="gpt-4o",
+        validation_alias=AliasChoices("CHAT_MODEL", "OPENAI_CHAT_MODEL"),
+    )
+    CHAT_MAX_CONTEXT_CHUNKS: int = 6
+    CHAT_MAX_HISTORY_MESSAGES: int = 10
+    CHAT_MAX_OUTPUT_TOKENS: int = 900
+    CHAT_TEMPERATURE: float = 0.2
     CHAT_SYSTEM_PROMPT: str = (
-        "You are a production-grade document-grounded assistant for PDF question answering. "
-        "Your job is to answer only from the supplied document context and the recent conversation history. "
-        "Treat the retrieved context as the primary source of truth.\n\n"
+        "You are a production-grade retrieval-augmented assistant for answering questions about uploaded PDFs. "
+        "Your job is to help the user using only the retrieved document evidence and the visible conversation context.\n"
+        "\n"
         "Core rules:\n"
-        "1. Answer only when the supplied context gives enough support.\n"
-        "2. If the context is missing, weak, irrelevant, contradictory, or incomplete, say so clearly.\n"
-        "3. Do not fabricate facts, page numbers, quotations, summaries, or conclusions.\n"
-        "4. Do not use outside knowledge as if it came from the document.\n"
-        "5. If the user's question is out of scope for the uploaded document, politely say that the question is out of context.\n"
-        "6. If the user asks something ambiguous, ask a short clarifying question instead of guessing.\n"
-        "7. If the user asks for an answer that requires information not present in the context, explicitly state what is missing.\n"
-        "8. If the retrieved context appears noisy or partially relevant, provide a cautious answer and qualify the uncertainty.\n"
-        "9. If prior conversation conflicts with the retrieved document context, prefer the retrieved context and explain the mismatch briefly.\n"
-        "10. Never claim to have read pages or sections that were not provided in the context.\n\n"
-        "Response behavior:\n"
-        "- For grounded answers, be direct, accurate, and concise.\n"
-        "- When useful, reference the supporting source snippets by mentioning the relevant page range already present in the context.\n"
-        "- For out-of-context questions, say that the uploaded document does not appear to contain enough information to answer.\n"
-        "- For insufficient evidence, respond with a safe fallback such as: 'I could not find enough support in the uploaded document to answer that confidently.'\n"
-        "- When helpful, suggest a better follow-up question the user can ask about the document.\n"
-        "- If the user requests a summary, extractive explanation, comparison, or list, provide it only from supported context.\n"
-        "- If the context indicates a possible answer but not a definitive one, label it as tentative.\n\n"
-        "Safety and failure handling:\n"
-        "- If the input question is malformed, too vague, or appears unrelated to the document, say that clearly and guide the user to rephrase.\n"
-        "- If the context appears empty, unavailable, or retrieval clearly failed, explain that no reliable document evidence was available.\n"
-        "- If multiple interpretations are possible, do not pick one silently.\n"
-        "- Maintain a helpful, calm tone even when refusing or narrowing scope."
+        "1. Treat the retrieved document context as the source of truth.\n"
+        "2. Do not invent facts, numbers, names, dates, page references, or conclusions that are not supported by the context.\n"
+        "3. If the retrieved context is missing, weak, ambiguous, or insufficient, say so clearly and briefly.\n"
+        "4. If the user's question is ambiguous, answer cautiously using the strongest supported interpretation and explicitly note uncertainty.\n"
+        "5. If the user asks for a summary, comparison, extraction, or explanation, do it only from the provided evidence.\n"
+        "6. Prefer direct, helpful answers over meta commentary.\n"
+        "7. When citing evidence, mention page numbers only when they are present in the supplied context.\n"
+        "8. If multiple retrieved snippets conflict, acknowledge the conflict instead of choosing an unsupported answer.\n"
+        "9. Never claim the document says something unless the supplied context supports that claim.\n"
+        "\n"
+        "Answer style:\n"
+        "- Start with the answer, not with filler.\n"
+        "- Be concise for simple factual questions.\n"
+        "- Use a short structured format when the question is complex.\n"
+        "- If the answer is not fully supported, say: 'I don't have enough support in the retrieved document context to answer that confidently.'\n"
+        "- If helpful, end with a brief note such as 'Supported by pages X-Y.'"
     )
     PINECONE_API_KEY: str = ""
     PINECONE_INDEX_NAME: str = ""
@@ -121,6 +126,7 @@ class Settings(BaseSettings):
     PDF_ANALYSIS_MIN_TABLE_COLUMNS: int = 2
     PDF_ANALYSIS_TABLE_DENSITY_THRESHOLD: float = 0.3
 
+    REDIS_URL: str = ""
     REDIS_ENABLED: bool = True
     REDIS_SCHEME: str = "redis"
     REDIS_HOST: str = "localhost"
@@ -150,22 +156,32 @@ class Settings(BaseSettings):
         "VERSION",
         "ENVIRONMENT",
         "LOG_LEVEL",
+        "DATABASE_URL",
         "DB_SCHEME",
         "DB_USERNAME",
         "DB_PASSWORD",
         "DB_HOST",
         "DB_NAME",
+        "DB_SSLMODE",
         "DOC_ROOT_USERNAME",
         "DOC_ROOT_PASSWORD",
         "JWT_SECRET_KEY",
         "JWT_ALGORITHM",
         "JWT_ISSUER",
         "JWT_AUDIENCE",
+        "GOOGLE_CLIENT_ID",
+        "GOOGLE_CLIENT_SECRET",
+        "GOOGLE_REDIRECT_URI",
+        "GOOGLE_AUTH_URL",
+        "GOOGLE_TOKEN_URL",
+        "GOOGLE_OAUTH_STATE_COOKIE_NAME",
+        "FRONTEND_AUTH_SUCCESS_URL",
+        "FRONTEND_AUTH_ERROR_URL",
         "DOCUMENT_UPLOAD_DIR",
         "OPENAI_API_KEY",
-        "EMBEDDING_MODEL",
-        "OPENAI_CHAT_MODEL",
+        "CHAT_MODEL",
         "CHAT_SYSTEM_PROMPT",
+        "EMBEDDING_MODEL",
         "PINECONE_API_KEY",
         "PINECONE_INDEX_NAME",
         "PINECONE_INDEX_HOST",
@@ -173,6 +189,7 @@ class Settings(BaseSettings):
         "PINECONE_REGION",
         "PINECONE_NAMESPACE",
         "PINECONE_METRIC",
+        "REDIS_URL",
         "REDIS_SCHEME",
         "REDIS_HOST",
         "REDIS_PASSWORD",
@@ -243,6 +260,10 @@ class Settings(BaseSettings):
             raise ValueError("DOC_ROOT_USERNAME and DOC_ROOT_PASSWORD must be set when docs are enabled")
         if self.DB_SCHEME not in {"postgresql+asyncpg", "postgresql"}:
             raise ValueError("DB_SCHEME must be 'postgresql+asyncpg' or 'postgresql'")
+        if self.DB_SSLMODE not in {"disable", "allow", "prefer", "require", "verify-ca", "verify-full"}:
+            raise ValueError(
+                "DB_SSLMODE must be one of: disable, allow, prefer, require, verify-ca, verify-full"
+            )
         if self.DB_PORT < 1:
             raise ValueError("DB_PORT must be greater than 0")
         if self.DB_POOL_SIZE < 1:
@@ -263,6 +284,21 @@ class Settings(BaseSettings):
             raise ValueError("JWT_ACCESS_TOKEN_EXPIRE_MINUTES must be greater than 0")
         if self.JWT_REFRESH_TOKEN_EXPIRE_DAYS < 1:
             raise ValueError("JWT_REFRESH_TOKEN_EXPIRE_DAYS must be greater than 0")
+        if self.GOOGLE_CLIENT_ID or self.GOOGLE_CLIENT_SECRET or self.GOOGLE_REDIRECT_URI:
+            if not self.GOOGLE_CLIENT_ID.strip():
+                raise ValueError("GOOGLE_CLIENT_ID must be set when Google OAuth is enabled")
+            if not self.GOOGLE_CLIENT_SECRET.strip():
+                raise ValueError("GOOGLE_CLIENT_SECRET must be set when Google OAuth is enabled")
+            if not self.GOOGLE_REDIRECT_URI.strip():
+                raise ValueError("GOOGLE_REDIRECT_URI must be set when Google OAuth is enabled")
+            if not self.GOOGLE_REDIRECT_URI.startswith(("http://", "https://")):
+                raise ValueError("GOOGLE_REDIRECT_URI must be a valid URL")
+            if not self.FRONTEND_AUTH_SUCCESS_URL.startswith(("http://", "https://")):
+                raise ValueError("FRONTEND_AUTH_SUCCESS_URL must be a valid URL")
+            if not self.FRONTEND_AUTH_ERROR_URL.startswith(("http://", "https://")):
+                raise ValueError("FRONTEND_AUTH_ERROR_URL must be a valid URL")
+        if self.GOOGLE_OAUTH_STATE_EXPIRE_SECONDS < 60:
+            raise ValueError("GOOGLE_OAUTH_STATE_EXPIRE_SECONDS must be at least 60 seconds")
         if not self.DOCUMENT_UPLOAD_DIR.strip():
             raise ValueError("DOCUMENT_UPLOAD_DIR must not be empty")
         if self.DOCUMENT_MAX_FILE_SIZE_BYTES < 1:
@@ -275,34 +311,26 @@ class Settings(BaseSettings):
             raise ValueError("DOCUMENT_CHUNK_OVERLAP must be smaller than DOCUMENT_CHUNK_SIZE")
         if self.OPENAI_EMBEDDING_TIMEOUT_SECONDS < 1:
             raise ValueError("OPENAI_EMBEDDING_TIMEOUT_SECONDS must be greater than 0")
+        if self.OPENAI_CHAT_TIMEOUT_SECONDS < 1:
+            raise ValueError("OPENAI_CHAT_TIMEOUT_SECONDS must be greater than 0")
+        if not self.CHAT_MODEL.strip():
+            raise ValueError("CHAT_MODEL must not be empty")
+        if self.CHAT_MAX_CONTEXT_CHUNKS < 1:
+            raise ValueError("CHAT_MAX_CONTEXT_CHUNKS must be greater than 0")
+        if self.CHAT_MAX_HISTORY_MESSAGES < 1:
+            raise ValueError("CHAT_MAX_HISTORY_MESSAGES must be greater than 0")
+        if self.CHAT_MAX_OUTPUT_TOKENS < 1:
+            raise ValueError("CHAT_MAX_OUTPUT_TOKENS must be greater than 0")
+        if not 0 <= self.CHAT_TEMPERATURE <= 2:
+            raise ValueError("CHAT_TEMPERATURE must be between 0 and 2")
+        if not self.CHAT_SYSTEM_PROMPT.strip():
+            raise ValueError("CHAT_SYSTEM_PROMPT must not be empty")
         if not self.EMBEDDING_MODEL.strip():
             raise ValueError("EMBEDDING_MODEL must not be empty")
         if self.EMBEDDING_DIMENSION < 1:
             raise ValueError("EMBEDDING_DIMENSION must be greater than 0")
         if self.EMBEDDING_BATCH_SIZE < 1:
             raise ValueError("EMBEDDING_BATCH_SIZE must be greater than 0")
-        if not self.OPENAI_CHAT_MODEL.strip():
-            raise ValueError("OPENAI_CHAT_MODEL must not be empty")
-        if self.OPENAI_CHAT_TIMEOUT_SECONDS < 1:
-            raise ValueError("OPENAI_CHAT_TIMEOUT_SECONDS must be greater than 0")
-        if self.OPENAI_CHAT_MAX_COMPLETION_TOKENS < 1:
-            raise ValueError("OPENAI_CHAT_MAX_COMPLETION_TOKENS must be greater than 0")
-        if not 0 <= self.OPENAI_CHAT_TEMPERATURE <= 2:
-            raise ValueError("OPENAI_CHAT_TEMPERATURE must be between 0 and 2")
-        if self.OPENAI_CHAT_INPUT_COST_PER_1M_TOKENS < 0:
-            raise ValueError("OPENAI_CHAT_INPUT_COST_PER_1M_TOKENS must be greater than or equal to 0")
-        if self.OPENAI_CHAT_OUTPUT_COST_PER_1M_TOKENS < 0:
-            raise ValueError("OPENAI_CHAT_OUTPUT_COST_PER_1M_TOKENS must be greater than or equal to 0")
-        if self.CHAT_RETRIEVAL_TOP_K < 1:
-            raise ValueError("CHAT_RETRIEVAL_TOP_K must be greater than 0")
-        if self.CHAT_HISTORY_MESSAGE_LIMIT < 0:
-            raise ValueError("CHAT_HISTORY_MESSAGE_LIMIT must be greater than or equal to 0")
-        if self.CHAT_MAX_CONTEXT_CHARACTERS < 1:
-            raise ValueError("CHAT_MAX_CONTEXT_CHARACTERS must be greater than 0")
-        if self.CHAT_SOURCE_TEXT_MAX_CHARACTERS < 1:
-            raise ValueError("CHAT_SOURCE_TEXT_MAX_CHARACTERS must be greater than 0")
-        if not self.CHAT_SYSTEM_PROMPT.strip():
-            raise ValueError("CHAT_SYSTEM_PROMPT must not be empty")
         if self.PINECONE_INDEX_NAME and not self.PINECONE_INDEX_NAME.replace("-", "").replace("_", "").isalnum():
             raise ValueError("PINECONE_INDEX_NAME may contain only letters, numbers, hyphens, and underscores")
         if self.PINECONE_CLOUD not in {"aws", "gcp", "azure"}:
@@ -347,22 +375,64 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> str:
+        if self.DATABASE_URL:
+            return self._normalize_database_url(self.DATABASE_URL)
+
         scheme = self.DB_SCHEME
+
         if scheme == "postgresql":
             scheme = "postgresql+asyncpg"
-        return f"{scheme}://{self.DB_USERNAME}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+
+        query = {"ssl": self.DB_SSLMODE} if self.DB_SSLMODE != "disable" else {}
+
+        return URL.create(
+            drivername=scheme,
+            username=self.DB_USERNAME,
+            password=self.DB_PASSWORD,
+            host=self.DB_HOST,
+            port=self.DB_PORT,
+            database=self.DB_NAME,
+            query=query,
+        ).render_as_string(hide_password=False)
 
     @property
     def alembic_database_url(self) -> str:
-        """
-        Database URL consumed by Alembic.
+        if self.DATABASE_URL:
+            return self._normalize_database_url(self.DATABASE_URL)
 
-        Alembic in this project uses the same connection settings as the app
-        itself so there is a single source of truth for database configuration.
-        """
+        query = {"ssl": self.DB_SSLMODE} if self.DB_SSLMODE != "disable" else {}
 
-        return self.database_url
+        return URL.create(
+            drivername="postgresql+asyncpg",
+            username=self.DB_USERNAME,
+            password=self.DB_PASSWORD,
+            host=self.DB_HOST,
+            port=self.DB_PORT,
+            database=self.DB_NAME,
+            query=query,
+        ).render_as_string(hide_password=False)
 
+    def _normalize_database_url(self, database_url: str) -> str:
+        url = make_url(database_url)
+        if url.drivername == "postgresql":
+            url = url.set(drivername="postgresql+asyncpg")
+
+        query = dict(url.query)
+        sslmode = query.pop("sslmode", None)
+        if sslmode and "ssl" not in query:
+            query["ssl"] = sslmode
+        query.pop("channel_binding", None)
+
+        return url.set(query=query).render_as_string(hide_password=False)
+    
+    @property
+    def is_production(self) -> bool:
+        return self.ENVIRONMENT.lower() in {"production", "prod"}
+    
+    @property
+    def secure_cookies(self) -> bool:
+        return self.is_production
+    
     @property
     def redis_url(self) -> str:
         """
@@ -371,6 +441,9 @@ class Settings(BaseSettings):
         This mirrors the database configuration style so deployment environments
         can provide Redis settings as discrete variables.
         """
+
+        if self.REDIS_URL:
+            return self.REDIS_URL
 
         credentials = ""
         if self.REDIS_PASSWORD:

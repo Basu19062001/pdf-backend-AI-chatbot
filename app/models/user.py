@@ -21,15 +21,28 @@ class User(Base):
             "length(trim(full_name)) >= 2",
             name="full_name_length_check",
         ),
+        CheckConstraint(
+            "auth_provider IN ('manual', 'google')",
+            name="auth_provider_valid_check",
+        ),
+        CheckConstraint(
+            "(auth_provider != 'manual') OR (password_hash IS NOT NULL)",
+            name="manual_users_password_required_check",
+        ),
     )
 
     CASCADE_OPTION = "all, delete-orphan"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     full_name: Mapped[str] = mapped_column(String(150), nullable=False)
-    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
-    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     role: Mapped[str] = mapped_column(String(30), default="user", nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    auth_provider: Mapped[str] = mapped_column(String(30), default="manual", nullable=False, index=True)
+    google_sub: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True, index=True)
+    profile_picture_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    email_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(

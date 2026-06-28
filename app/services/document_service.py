@@ -78,28 +78,30 @@ class DocumentService:
         upload_file: UploadFile,
         title: str | None = None,
     ) -> DocumentUploadResponse:
+        user_id = user.id
         logger.info(
             "Starting PDF upload for user '%s'. incoming_file='%s' requested_title='%s'",
-            user.id,
+            user_id,
             upload_file.filename,
             title,
         )
         validated_upload = await self.validation_service.validate_upload(upload_file)
         logger.info(
             "Upload validation completed for user '%s'. original_file='%s' size_bytes=%s content_type='%s'",
-            user.id,
+            user_id,
             validated_upload.original_file_name,
             validated_upload.file_size_bytes,
             validated_upload.content_type,
         )
         stored_file: StoredDocumentFile | None = None
         document: Document | None = None
+        document_id: uuid.UUID | None = None
         vector_ids_upserted: list[str] = []
 
         try:
             logger.info(
                 "Persisting uploaded PDF to storage for user '%s'. original_file='%s'",
-                user.id,
+                user_id,
                 validated_upload.original_file_name,
             )
             stored_file = await self.storage_service.store_pdf(
@@ -108,44 +110,45 @@ class DocumentService:
             )
             logger.info(
                 "Stored uploaded PDF for user '%s'. stored_file='%s' relative_path='%s'",
-                user.id,
+                user_id,
                 stored_file.stored_file_name,
                 stored_file.relative_path,
             )
             logger.info(
                 "Creating processing document row for user '%s'. title='%s'",
-                user.id,
+                user_id,
                 title or Path(stored_file.original_file_name).stem,
             )
             document = await self._create_processing_document(
-                user_id=user.id,
+                user_id=user_id,
                 title=title,
                 stored_file=stored_file,
                 file_size_bytes=validated_upload.file_size_bytes,
             )
+            document_id = document.id
             logger.info(
                 "Created processing document '%s' for user '%s'. status='%s'",
-                document.id,
-                user.id,
+                document_id,
+                user_id,
                 document.status,
             )
 
             extraction_started_at = utc_now()
             logger.info(
                 "Starting PDF extraction for document '%s'. absolute_path='%s'",
-                document.id,
+                document_id,
                 stored_file.absolute_path,
             )
             extraction_result = await self.pdf_service.extract_document(stored_file.absolute_path)
             validated_pages = self.validation_service.validate_extracted_pages(extraction_result.page_texts)
             logger.info(
                 "PDF extraction completed for document '%s'. pages=%s summary='%s'",
-                document.id,
+                document_id,
                 len(validated_pages),
                 extraction_result.summary,
             )
             await self._create_processing_log(
-                document_id=document.id,
+                document_id=document_id,
                 step_name="extraction",
                 status_value="completed",
                 message=(
@@ -159,7 +162,7 @@ class DocumentService:
             chunking_started_at = utc_now()
             logger.info(
                 "Starting chunk generation for document '%s'. page_count=%s'",
-                document.id,
+                document_id,
                 len(validated_pages),
             )
             chunks = self.chunk_service.split_pages(validated_pages)
@@ -170,11 +173,11 @@ class DocumentService:
                 )
             logger.info(
                 "Chunk generation completed for document '%s'. chunks=%s",
-                document.id,
+                document_id,
                 len(chunks),
             )
             await self._create_processing_log(
-                document_id=document.id,
+                document_id=document_id,
                 step_name="chunking",
                 status_value="completed",
                 message=f"Prepared {len(chunks)} chunks from extracted PDF text.",
@@ -185,7 +188,7 @@ class DocumentService:
             embedding_started_at = utc_now()
             logger.info(
                 "Starting embedding generation for document '%s'. chunk_count=%s model='%s'",
-                document.id,
+                document_id,
                 len(chunks),
                 settings.EMBEDDING_MODEL,
             )
@@ -194,8 +197,8 @@ class DocumentService:
                 chunk_records.append(
                     DocumentChunk(
                         id=uuid.uuid4(),
-                        document_id=document.id,
-                        pinecone_vector_id=f"{document.id}:{chunk.chunk_index}",
+                        document_id=document_id,
+                        pinecone_vector_id=f"{document_id}:{chunk.chunk_index}",
                         chunk_index=chunk.chunk_index,
                         page_number_start=chunk.page_number_start,
                         page_number_end=chunk.page_number_end,
@@ -207,16 +210,16 @@ class DocumentService:
 
             embeddings = await self.embedding_service.create_embeddings(
                 [chunk_record.chunk_text for chunk_record in chunk_records],
-                user_reference=str(user.id),
+                user_reference=str(user_id),
             )
             logger.info(
                 "Embedding generation completed for document '%s'. embeddings=%s dimension=%s",
-                document.id,
+                document_id,
                 len(embeddings),
                 settings.EMBEDDING_DIMENSION,
             )
             await self._create_processing_log(
-                document_id=document.id,
+                document_id=document_id,
                 step_name="embedding",
                 status_value="completed",
                 message=(
@@ -230,7 +233,7 @@ class DocumentService:
             vector_started_at = utc_now()
             logger.info(
                 "Starting Pinecone upsert for document '%s'. vector_count=%s index='%s'",
-                document.id,
+                document_id,
                 len(chunk_records),
                 settings.PINECONE_INDEX_NAME,
             )
@@ -239,8 +242,8 @@ class DocumentService:
                     vector_id=chunk_record.pinecone_vector_id,
                     values=embedding,
                     metadata={
-                        "document_id": str(document.id),
-                        "user_id": str(user.id),
+                        "document_id": str(document_id),
+                        "user_id": str(user_id),
                         "chunk_id": str(chunk_record.id),
                         "chunk_index": chunk_record.chunk_index,
                         "page_number_start": chunk_record.page_number_start or 0,
@@ -256,12 +259,12 @@ class DocumentService:
             vector_ids_upserted = [record.vector_id for record in vector_records]
             logger.info(
                 "Pinecone upsert completed for document '%s'. vector_count=%s index='%s'",
-                document.id,
+                document_id,
                 len(vector_ids_upserted),
                 settings.PINECONE_INDEX_NAME,
             )
             await self._create_processing_log(
-                document_id=document.id,
+                document_id=document_id,
                 step_name="vector_index",
                 status_value="completed",
                 message=(
@@ -275,7 +278,7 @@ class DocumentService:
             persistence_started_at = utc_now()
             logger.info(
                 "Persisting chunks for document '%s'. chunk_count=%s",
-                document.id,
+                document_id,
                 len(chunk_records),
             )
             for chunk_record in chunk_records:
@@ -287,24 +290,24 @@ class DocumentService:
             document.error_message = None
             logger.info(
                 "Updating processed document metadata for document '%s'. total_pages=%s status='%s'",
-                document.id,
+                document_id,
                 document.total_pages,
                 document.status,
             )
             await self._create_processing_log(
-                document_id=document.id,
+                document_id=document_id,
                 step_name="persistence",
                 status_value="completed",
                 message=f"Saved {len(chunks)} chunks for processed PDF.",
                 started_at=persistence_started_at,
                 completed_at=utc_now(),
             )
-            logger.info("Committing processed upload transaction for document '%s'.", document.id)
+            logger.info("Committing processed upload transaction for document '%s'.", document_id)
             await self.session.commit()
             await self.session.refresh(document)
-            logger.info("Uploaded and processed document '%s' for user '%s'.", document.id, user.id)
+            logger.info("Uploaded and processed document '%s' for user '%s'.", document_id, user_id)
             return DocumentUploadResponse(
-                document_id=document.id,
+                document_id=document_id,
                 status=document.status,
                 pages=document.total_pages or 0,
                 chunks=len(chunks),
@@ -312,59 +315,46 @@ class DocumentService:
         except HTTPException as exc:
             logger.warning(
                 "Upload pipeline returned an HTTP error for user '%s'. document_id='%s' detail='%s'",
-                user.id,
-                document.id if document is not None else None,
+                user_id,
+                document_id,
                 exc.detail,
             )
             await self.session.rollback()
             if vector_ids_upserted:
                 await self.pinecone_service.delete_vectors(vector_ids_upserted)
-            if document is not None:
-                await self._mark_document_failed(document.id, str(exc.detail))
-            elif stored_file is not None:
-                logger.info(
-                    "Deleting stored file after upload failure for user '%s'. path='%s'",
-                    user.id,
-                    stored_file.absolute_path,
-                )
-                await self.storage_service.delete_file(stored_file.absolute_path)
+            if document_id is not None:
+                await self._mark_document_failed(document_id, str(exc.detail))
             raise
         except SQLAlchemyError as exc:
             await self.session.rollback()
-            logger.exception("Database error while uploading a PDF for user '%s'.", user.id)
+            logger.exception("Database error while uploading a PDF for user '%s'.", user_id)
             if vector_ids_upserted:
                 await self.pinecone_service.delete_vectors(vector_ids_upserted)
-            if document is not None:
-                await self._mark_document_failed(document.id, "Failed to persist uploaded PDF metadata")
-            elif stored_file is not None:
-                logger.info(
-                    "Deleting stored file after database failure for user '%s'. path='%s'",
-                    user.id,
-                    stored_file.absolute_path,
-                )
-                await self.storage_service.delete_file(stored_file.absolute_path)
+            if document_id is not None:
+                await self._mark_document_failed(document_id, "Failed to persist uploaded PDF metadata")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Unable to upload the PDF at the moment",
             ) from exc
         except Exception as exc:
             await self.session.rollback()
-            logger.exception("Unexpected error while uploading a PDF for user '%s'.", user.id)
+            logger.exception("Unexpected error while uploading a PDF for user '%s'.", user_id)
             if vector_ids_upserted:
                 await self.pinecone_service.delete_vectors(vector_ids_upserted)
-            if document is not None:
-                await self._mark_document_failed(document.id, "Unexpected error while processing uploaded PDF")
-            elif stored_file is not None:
-                logger.info(
-                    "Deleting stored file after unexpected upload failure for user '%s'. path='%s'",
-                    user.id,
-                    stored_file.absolute_path,
-                )
-                await self.storage_service.delete_file(stored_file.absolute_path)
+            if document_id is not None:
+                await self._mark_document_failed(document_id, "Unexpected error while processing uploaded PDF")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Unable to upload the PDF at the moment",
             ) from exc
+        finally:
+            if stored_file is not None:
+                logger.info(
+                    "Deleting temporary uploaded PDF for user '%s'. path='%s'",
+                    user_id,
+                    stored_file.absolute_path,
+                )
+                await self.storage_service.delete_file(stored_file.absolute_path)
 
     async def _create_processing_document(
         self,

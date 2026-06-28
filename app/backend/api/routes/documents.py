@@ -61,9 +61,10 @@ async def upload_document(
     Upload, process, and persist a PDF document for the authenticated user.
 
     This endpoint accepts a multipart PDF upload, validates the incoming file,
-    stores it on disk, creates the backing document row, extracts page text,
-    generates chunks, persists those chunks to PostgreSQL, and records
-    processing logs for each major step.
+    writes it to temporary local storage for extraction, creates the backing
+    document row, extracts page text, generates chunks, persists those chunks
+    to PostgreSQL, and records processing logs for each major step. The
+    temporary PDF file is removed after processing finishes or fails.
 
     Args:
         auth_context: Authenticated request context resolved from the bearer token.

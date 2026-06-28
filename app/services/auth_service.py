@@ -45,8 +45,10 @@ class AuthService:
                 full_name=payload.full_name,
                 email=normalized_email,
                 password_hash=hash_password(payload.password.get_secret_value()),
+                auth_provider="manual",
                 role="user",
                 is_active=True,
+                email_verified=False,
             )
 
             self.session.add(user)

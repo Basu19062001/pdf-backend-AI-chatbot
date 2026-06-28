@@ -1,11 +1,10 @@
 from datetime import datetime
-from decimal import Decimal
 import uuid
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-class ChatMessageSourceResponse(BaseModel):
+class ChatSourceResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     chunk_id: uuid.UUID
@@ -17,8 +16,7 @@ class ChatMessageSourceResponse(BaseModel):
 
 
 class ChatMessageCreate(BaseModel):
-    role: str = "user"
-    content: str
+    content: str = Field(min_length=1)
     model_name: str | None = None
 
     @field_validator("content")
@@ -36,42 +34,42 @@ class ChatMessageResponse(BaseModel):
     id: uuid.UUID
     role: str
     content: str
-    model_name: str | None
+    llm_model: str | None = None
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     total_tokens: int | None = None
-    estimated_cost: Decimal | None = None
     created_at: datetime
-    sources: list[ChatMessageSourceResponse] = Field(default_factory=list)
+    sources: list[ChatSourceResponse] = Field(default_factory=list)
 
 
 class ChatSessionCreate(BaseModel):
     document_id: uuid.UUID
     title: str | None = None
 
-    @field_validator("title")
-    @classmethod
-    def normalize_title(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        normalized = value.strip()
-        return normalized or None
 
-
-class ChatSessionResponse(BaseModel):
+class ChatSessionSummaryResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
     user_id: uuid.UUID
     document_id: uuid.UUID
-    title: str | None
+    title: str | None = None
     status: str
     started_at: datetime
     last_message_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class ChatSessionResponse(ChatSessionSummaryResponse):
     messages: list[ChatMessageResponse] = Field(default_factory=list)
 
 
 class ChatSessionListResponse(BaseModel):
-    items: list[ChatSessionResponse]
+    items: list[ChatSessionSummaryResponse]
+
+
+class ChatTurnResponse(BaseModel):
+    session: ChatSessionResponse
+    user_message: ChatMessageResponse
+    assistant_message: ChatMessageResponse

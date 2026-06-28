@@ -2,6 +2,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backend.api.auth_dependencies import CurrentAuthContext
@@ -12,6 +13,7 @@ from app.schemas.chat import (
     ChatSessionCreate,
     ChatSessionListResponse,
     ChatSessionResponse,
+    ChatTurnResponse,
 )
 from app.services.chat_service import ChatService
 
@@ -19,33 +21,41 @@ router = APIRouter()
 logger = get_logger(__name__)
 
 
-@router.get("/", response_model=ChatSessionListResponse)
-async def list_chats(
+@router.get(
+    "/sessions",
+    response_model=ChatSessionListResponse,
+    summary="List chat sessions for the authenticated user",
+    description=(
+        "Return the current user's chat sessions ordered by most recently updated. "
+        "Each session is scoped to the authenticated account and its linked document."
+    ),
+)
+async def list_sessions(
     auth_context: CurrentAuthContext,
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> ChatSessionListResponse:
     """
-    List chat sessions for the current authenticated user.
+    List all chat sessions owned by the authenticated user.
 
-    This endpoint returns the authenticated user's persisted chat sessions in
-    reverse chronological order. Only chat sessions owned by the caller are
-    included, and the response is intended to support chat history listings
-    in client applications.
+    This endpoint returns lightweight session metadata for the current caller.
+    It is intended for rendering a chat-session sidebar or resuming a previous
+    document conversation.
 
     Args:
         auth_context: Authenticated request context resolved from the bearer token.
         session: Async database session injected by FastAPI.
 
     Returns:
-        A list of chat sessions owned by the authenticated user.
+        A list of chat-session summaries belonging to the authenticated user.
 
     Raises:
-        HTTPException: Returned when the chat sessions cannot be loaded or an
-            unexpected server-side error occurs.
+        HTTPException: Returned when chat sessions cannot be loaded.
     """
     try:
         service = ChatService(session)
-        return ChatSessionListResponse(items=await service.list_sessions(auth_context.user.id))
+        response = ChatSessionListResponse(items=await service.list_sessions(auth_context.user.id))
+        logger.info("Listed chat sessions for authenticated user '%s'.", auth_context.user.id)
+        return response
     except HTTPException:
         raise
     except Exception as exc:
@@ -60,41 +70,44 @@ async def list_chats(
     "/",
     response_model=ChatSessionResponse,
     status_code=status.HTTP_201_CREATED,
+    summary="Create a chat session for a processed document",
+    description=(
+        "Create a new authenticated chat session bound to a single uploaded document. "
+        "The document must belong to the current user."
+    ),
 )
-async def create_chat(
+async def create_session(
+    payload: ChatSessionCreate,
     auth_context: CurrentAuthContext,
     session: Annotated[AsyncSession, Depends(get_db_session)],
-    payload: ChatSessionCreate,
 ) -> ChatSessionResponse:
     """
-    Create a new chat session for a processed document.
+    Create a new document-scoped chat session.
 
-    This endpoint creates a persistent chat session scoped to a single
-    uploaded document owned by the authenticated user. The target document
-    must already be fully processed so that retrieval and question-answering
-    can be performed against its stored chunks and vectors.
+    This endpoint initializes a persistent chat session associated with one of
+    the authenticated user's uploaded documents. The created session can then
+    be used for both non-streaming and streaming question-answer turns.
 
     Args:
+        payload: Chat-session creation payload containing the target document ID.
         auth_context: Authenticated request context resolved from the bearer token.
         session: Async database session injected by FastAPI.
-        payload: Request payload containing the target document identifier and
-            optional chat title override.
 
     Returns:
-        The newly created chat session metadata.
+        The newly created chat session, including its current message list.
 
     Raises:
         HTTPException: Returned when the document does not exist, does not
-            belong to the authenticated user, is not ready for chat, or the
-            chat session cannot be created.
+            belong to the user, or the session cannot be created.
     """
     try:
         service = ChatService(session)
         response = await service.create_session(auth_context.user.id, payload)
         logger.info(
-            "Created chat session '%s' for authenticated user '%s'.",
+            "Created chat session '%s' for authenticated user '%s' and document '%s'.",
             response.id,
             auth_context.user.id,
+            response.document_id,
         )
         return response
     except HTTPException:
@@ -107,45 +120,50 @@ async def create_chat(
         ) from exc
 
 
-@router.get("/{chat_id}", response_model=ChatSessionResponse)
-async def get_chat(
-    chat_id: uuid.UUID,
+@router.get(
+    "/sessions/{session_id}",
+    response_model=ChatSessionResponse,
+    summary="Get one chat session with message history",
+    description=(
+        "Load a single authenticated chat session and its persisted messages. "
+        "Access is limited to sessions owned by the current user."
+    ),
+)
+async def get_session(
+    session_id: uuid.UUID,
     auth_context: CurrentAuthContext,
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> ChatSessionResponse:
     """
-    Load a single chat session owned by the authenticated user.
+    Load a single chat session for the authenticated user.
 
-    This endpoint resolves one persisted chat session by identifier and
-    returns its metadata together with the stored message history. Ownership
-    is enforced through the authenticated user context so callers can only
-    access their own chat sessions.
+    This endpoint returns the full message history for one document-specific
+    session so a client can restore a previous conversation view.
 
     Args:
-        chat_id: Unique identifier of the chat session to load.
+        session_id: Unique identifier of the chat session to load.
         auth_context: Authenticated request context resolved from the bearer token.
         session: Async database session injected by FastAPI.
 
     Returns:
-        The requested chat session with its persisted messages and any saved
-        source metadata associated with assistant answers.
+        The requested chat session together with its message history.
 
     Raises:
-        HTTPException: Returned when the chat session does not exist, is not
-            owned by the authenticated user, or cannot be loaded.
+        HTTPException: Returned when the session does not exist or cannot be loaded.
     """
     try:
         service = ChatService(session)
-        chat_session = await service.get_session(auth_context.user.id, chat_id)
+        chat_session = await service.get_session(auth_context.user.id, session_id)
         if not chat_session:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+        logger.info("Loaded chat session '%s' for authenticated user '%s'.", session_id, auth_context.user.id)
         return chat_session
     except HTTPException:
         raise
     except Exception as exc:
         logger.exception(
             "Unhandled exception while loading chat session '%s' for user '%s'.",
-            chat_id,
+            session_id,
             auth_context.user.id,
         )
         raise HTTPException(
@@ -155,67 +173,131 @@ async def get_chat(
 
 
 @router.post(
-    "/{chat_id}/messages",
-    response_model=ChatSessionResponse,
+    "/sessions/{session_id}/messages",
+    response_model=ChatTurnResponse,
     status_code=status.HTTP_201_CREATED,
+    summary="Submit a question and return a complete assistant answer",
+    description=(
+        "Persist a user message, retrieve relevant document chunks, generate a grounded "
+        "assistant response, and return the completed chat turn in one response."
+    ),
 )
 async def add_message(
-    chat_id: uuid.UUID,
+    session_id: uuid.UUID,
+    payload: ChatMessageCreate,
     auth_context: CurrentAuthContext,
     session: Annotated[AsyncSession, Depends(get_db_session)],
-    payload: ChatMessageCreate,
-) -> ChatSessionResponse:
+) -> ChatTurnResponse:
     """
-    Submit a user message and generate a document-grounded assistant reply.
+    Process a non-streaming RAG chat turn for the authenticated user.
 
-    This endpoint runs the full chat pipeline for an existing chat session:
-    it validates chat ownership, embeds the incoming user question, retrieves
-    similar document chunks from Pinecone, loads those chunks from PostgreSQL,
-    builds grounded context, requests an answer from the configured OpenAI
-    chat model, persists the user and assistant messages, stores source
-    references, and records usage metadata for the exchange.
+    This endpoint stores the caller's question, retrieves matching chunks from
+    the linked document, sends the grounded prompt to the LLM, persists the
+    assistant reply, and returns both sides of the completed turn.
 
     Args:
-        chat_id: Unique identifier of the target chat session.
+        session_id: Unique identifier of the chat session receiving the message.
+        payload: User question payload, with an optional model override.
         auth_context: Authenticated request context resolved from the bearer token.
         session: Async database session injected by FastAPI.
-        payload: Incoming user message payload containing the question content
-            and optional model override.
 
     Returns:
-        The updated chat session including the newly persisted user message,
-        assistant response, and any retrieved source citations.
+        The updated session together with the persisted user and assistant messages.
 
     Raises:
-        HTTPException: Returned when the chat session does not exist, is not
-            owned by the authenticated user, is inactive, is linked to a
-            document that is not ready for chat, or the retrieval/answering
-            pipeline fails.
+        HTTPException: Returned when the session or document is unavailable, the
+            document is not ready for chat, or answer generation fails.
     """
     try:
         service = ChatService(session)
-        chat_session = await service.add_message(
+        response = await service.answer_question(
             user_id=auth_context.user.id,
-            session_id=chat_id,
+            session_id=session_id,
             payload=payload,
         )
-        if not chat_session:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
         logger.info(
-            "Completed chat answer generation for session '%s' and user '%s'.",
-            chat_id,
+            "Completed non-streaming chat turn for session '%s' and user '%s'.",
+            session_id,
             auth_context.user.id,
         )
-        return chat_session
+        return response
     except HTTPException:
         raise
     except Exception as exc:
         logger.exception(
-            "Unhandled exception while generating a chat response for session '%s' and user '%s'.",
-            chat_id,
+            "Unhandled exception while processing non-streaming chat turn for session '%s' and user '%s'.",
+            session_id,
             auth_context.user.id,
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Unable to generate a chat response at the moment",
+            detail="Unable to process the chat message at the moment",
+        ) from exc
+
+
+@router.post(
+    "/sessions/{session_id}/messages/stream",
+    summary="Submit a question and stream the assistant answer",
+    description=(
+        "Persist a user message and stream the assistant response incrementally over "
+        "Server-Sent Events while the backend performs retrieval and generation."
+    ),
+)
+async def stream_message(
+    session_id: uuid.UUID,
+    payload: ChatMessageCreate,
+    auth_context: CurrentAuthContext,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> StreamingResponse:
+    """
+    Stream a grounded assistant answer over Server-Sent Events.
+
+    This endpoint is the production chat transport for real-time UX. It stores
+    the incoming user message, performs retrieval against the associated
+    document, and streams assistant text deltas as SSE events until completion.
+
+    Args:
+        session_id: Unique identifier of the chat session receiving the message.
+        payload: User question payload, with an optional model override.
+        auth_context: Authenticated request context resolved from the bearer token.
+        session: Async database session injected by FastAPI.
+
+    Returns:
+        A `text/event-stream` response that emits chat lifecycle and token-delta events.
+
+    Raises:
+        HTTPException: Returned when the session or document is unavailable or
+            when the streaming response cannot be initialized.
+    """
+    try:
+        service = ChatService(session)
+        logger.info(
+            "Starting streaming chat turn for session '%s' and user '%s'.",
+            session_id,
+            auth_context.user.id,
+        )
+        return StreamingResponse(
+            service.stream_answer(
+                user_id=auth_context.user.id,
+                session_id=session_id,
+                payload=payload,
+            ),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(
+            "Unhandled exception while starting streaming chat turn for session '%s' and user '%s'.",
+            session_id,
+            auth_context.user.id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to start streaming the assistant response at the moment",
         ) from exc
